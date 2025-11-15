@@ -4,6 +4,8 @@ import type { LectureSummary } from '../types'
 import { Link } from 'react-router-dom'
 import styled from 'styled-components';
 
+const categories = ['전체', '컴퓨터네트워크', '프론트엔드', '백엔드', 'DB', '운영체제', 'Mobile']
+
 const Input = styled.input`
   border: 1px solid black;
   border-radius: 10px;
@@ -16,11 +18,17 @@ const Input = styled.input`
   transform: translateX(-50%);
 `;
 
+const Button = styled.div`
+  border: none;
+  display: inline-block;
+`;
+
 export function LectureListPage() {
   const [items, setItems] = useState<LectureSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [value, setValue] = useState('');
   const [filtered, setFiltered] = useState<LectureSummary[]>([]);
+  const [categoriedItems, setCitems] = useState<LectureSummary[]>([]);
 
   useEffect(() => {
     let mounted = true
@@ -28,6 +36,7 @@ export function LectureListPage() {
       .then((list) => {
         if (!mounted) return
         setItems(list)
+        setCitems(list)
       })
       .finally(() => setLoading(false))
     return () => {
@@ -103,11 +112,28 @@ export function LectureListPage() {
     setFiltered(f);
   }
 
+  const onClick = (e:any) => {
+    const val = e.target?.id;
+    console.log(val);
+    if(val != '전체') {
+      const c = items.filter((item) => {
+        return item.category == val;
+      })
+      setCitems(c);
+    }
+    else setCitems(items);
+  }
+
   return (
     <div style={{ padding: 16, maxWidth: 1000, margin: '0 auto'}}>
       <div style={{marginBottom: '15px', position: 'fixed', left: '50%', transform: 'translateX(-50%)', top: '0', backgroundColor: 'black', width: '100%', padding: '20px', display: 'flex', flexDirection: 'row'}}>
         <h2 style={{ marginTop: 0, fontSize: '20px', fontWeight: 'bolder', color: 'white' }}>DailyFit Lecture</h2>
         <Input value={value} onChange={onChange} placeholder='검색'/>
+      </div>
+      <div style={{marginTop: '4%'}}>
+        {categories.map((c) => 
+          (<Button onClick={onClick} id={c} style={{marginRight: '10px', cursor: 'pointer'}}>{c}</Button>)
+        )}
       </div>
       {loading && <div>로딩 중…</div>}
       <div
@@ -115,10 +141,10 @@ export function LectureListPage() {
           display: 'grid',
           gridTemplateColumns: 'repeat(3, minmax(260px, 1fr))',
           gap: 12,
-          marginTop: '80px',
+          marginTop: '25px',
         }}
       >
-        { value? filtered.map(f => (
+        { value? filtered.map((f) => (
           <ItemContent 
             id={f.id}
             thumbnailUrl={f.thumbnailUrl}
@@ -127,7 +153,7 @@ export function LectureListPage() {
             durationSec={f.durationSec}
             progress={f.progress}
           />
-        )) : items.map((L) => (
+        )) : categoriedItems.map((L) => (
             <ItemContent 
               id={L.id}
               thumbnailUrl={L.thumbnailUrl}

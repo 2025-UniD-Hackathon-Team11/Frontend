@@ -10,6 +10,7 @@ export type LectureSummary = {
   durationSec: number
   lastWatchedSec?: number
   progress: number // 0 ~ 1
+  category?: string
 }
 
 export type AnswerResponse = {
