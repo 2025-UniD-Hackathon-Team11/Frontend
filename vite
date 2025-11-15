@@ -1,0 +1,61 @@
+
+Port 5173 is in use, trying another one...
+Port 5174 is in use, trying another one...
+Port 5175 is in use, trying another one...
+Port 5176 is in use, trying another one...
+Port 5177 is in use, trying another one...
+Port 5178 is in use, trying another one...
+Port 5179 is in use, trying another one...
+
+  VITE v7.2.2  ready in 787 ms
+
+  ➜  Local:   http://localhost:5180/
+  ➜  Network: use --host to expose
+  ➜  press h + enter to show help
+9:41:25 PM [vite] (client) Pre-transform error: Failed to loa
+9:41:25 PM [vite] (client) Pre-transform error: Failed to load PostCSS config (searchPath: /Users/solminlee/Desktop/uni-D)
+9:41:25 PM [vite] (client) Pre-transform error: Failed to load PostCSS config (searchPath: /Users/solminlee/Desktop/uni-D): [Error] Loading PostCSS Plugin failed: Cannot find module '
+9:41:25 PM [vite] (client) Pre-transform error: Failed to load PostCSS config (searchPath: /Users/solminlee/Desktop/uni-D): [Error] Loading PostCSS Plugin failed: Cannot find module '@tailwindcss/postcss'
+Require stack:
+- /Users/solminlee/Desktop/uni-D/postcss.config.js
+
+(@/Users/solminlee/Desktop/uni-D/postcss.config.js)
+Error: Loading PostCSS Plugin failed: Cannot find module '@ta
+Error: Loading PostCSS Plugin failed: Cannot find module '@tailwindcss/postcss'
+Require stack:
+- /Users/solminlee/Desktop/uni-D/postcss.config.js
+
+(@/Users/solminlee/Desktop/uni-D/postcss.config.js)
+    at load$1 (file:///Users/solminlee/Desktop/uni-D/node_mod
+    at load$1 (file:///Users/solminlee/Desktop/uni-D/node_modules/vite/dist/node/chunks/config.js:7875:10)
+    at async Promise.all (index 0)
+    at async plugins (file:///Users/solminlee/Desktop/uni-D/n
+    at async plugins (file:///Users/solminlee/Desktop/uni-D/node_modules/vite/dist/node/chunks/config.js:7897:11)
+    at async processResult (file:///Users/solminlee/Desktop/u
+    at async processResult (file:///Users/solminlee/Desktop/uni-D/node_modules/vite/dist/node/chunks/config.js:7936:13)
+  Plugin: vite:css
+  File: /Users/solminlee/Desktop/uni-D/src/index.css
+9:41:25 PM [vite] Internal server error: Failed to load PostC
+9:41:25 PM [vite] Internal server error: Failed to load PostCSS config (searchPath: /Users/solminlee/Desktop/uni-D): [Erro
+9:41:25 PM [vite] Internal server error: Failed to load PostCSS config (searchPath: /Users/solminlee/Desktop/uni-D): [Error] Loading PostCSS Plugin failed: Cannot find module '@tailwi
+9:41:25 PM [vite] Internal server error: Failed to load PostCSS config (searchPath: /Users/solminlee/Desktop/uni-D): [Error] Loading PostCSS Plugin failed: Cannot find module '@tailwindcss/postcss'
+Require stack:
+- /Users/solminlee/Desktop/uni-D/postcss.config.js
+
+(@/Users/solminlee/Desktop/uni-D/postcss.config.js)
+Error: Loading PostCSS Plugin failed: Cannot find module '@ta
+Error: Loading PostCSS Plugin failed: Cannot find module '@tailwindcss/postcss'
+Require stack:
+- /Users/solminlee/Desktop/uni-D/postcss.config.js
+
+(@/Users/solminlee/Desktop/uni-D/postcss.config.js)
+    at load$1 (file:///Users/solminlee/Desktop/uni-D/node_mod
+    at load$1 (file:///Users/solminlee/Desktop/uni-D/node_modules/vite/dist/node/chunks/config.js:7875:10)
+    at async Promise.all (index 0)
+    at async plugins (file:///Users/solminlee/Desktop/uni-D/n
+    at async plugins (file:///Users/solminlee/Desktop/uni-D/node_modules/vite/dist/node/chunks/config.js:7897:11)
+    at async processResult (file:///Users/solminlee/Desktop/u
+    at async processResult (file:///Users/solminlee/Desktop/uni-D/node_modules/vite/dist/node/chunks/config.js:7936:13)
+  Plugin: vite:css
+  File: /Users/solminlee/Desktop/uni-D/src/index.css
+^C

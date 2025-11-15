@@ -6,7 +6,7 @@ export function Solution() {
   return (
     <section className="w-full bg-white">
       <div ref={ref} className="mx-auto max-w-6xl px-6 py-20">
-        <h2 className="text-2xl sm:text-3xl font-medium text-ink-900">DailyFit Lecture가 바꾸는 것</h2>
+        <h2 className="text-2xl sm:text-3xl font-medium text-ink-900">UrunFit이 바꾸는 것</h2>
         <div className="mt-8 grid grid-cols-1 gap-5 sm:grid-cols-3">
           <Tilt className={`rounded-xl border border-ink-300 bg-white/90 p-6 shadow-sm transition-all duration-500 hover:shadow ${inView ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'}`}>
             <h3 className="flex items-center gap-2 font-semibold text-ink-900">

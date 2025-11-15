@@ -1,14 +1,15 @@
-import './App.css'
+
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { LectureListPage } from './pages/LectureListPage'
 import { LecturePlayerPage } from './pages/LecturePlayerPage'
-import { LandingPage } from './pages/LandingPage'
+import GlassHome from './pages/GlassHome'
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<LandingPage />} />
+        <Route path="/" element={<GlassHome />} />
+        <Route path="/landing-fx" element={<GlassHome />} />
         <Route path="/lectures" element={<LectureListPage />} />
         <Route path="/lecture/:lectureId" element={<LecturePlayerPage />} />
       </Routes>

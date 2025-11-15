@@ -7,8 +7,9 @@ export function QuestionPanel(props: {
   onMicStart: () => void
   onMicStop: () => void
   onSendText: (text: string) => void
+  onTextModeStart?: () => void
 }) {
-  const { messages, isListening, interimText, onMicStart, onMicStop, onSendText } = props
+  const { messages, isListening, interimText, onMicStart, onMicStop, onSendText, onTextModeStart } = props
   const [isTextMode, setIsTextMode] = useState(false)
   const [draft, setDraft] = useState('')
 
@@ -71,7 +72,16 @@ export function QuestionPanel(props: {
             ⏹
           </button>
         )}
-        <button onClick={() => setIsTextMode((v) => !v)} title="텍스트 질문">
+        <button
+          onClick={() => {
+            setIsTextMode((v) => {
+              const next = !v
+              if (next) onTextModeStart?.()
+              return next
+            })
+          }}
+          title="텍스트 질문"
+        >
           💬
         </button>
         {isTextMode && (

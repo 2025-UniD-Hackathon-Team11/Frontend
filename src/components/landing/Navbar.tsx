@@ -4,7 +4,7 @@ export function Navbar() {
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
         <a href="/" className="flex items-center gap-2 text-sm font-medium text-ink-900">
           <span className="inline-block h-2.5 w-2.5 rounded-full bg-black" />
-          DailyFit Lecture
+          UrunFit
         </a>
         <nav className="flex items-center gap-3">
           <a href="/lectures" className="hidden text-sm text-ink-700 sm:inline-block">
