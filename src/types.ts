@@ -8,7 +8,7 @@ export type LectureSummary = {
   description: string
   thumbnailUrl: string
   durationSec: number
-  lastWatchedSec: number
+  lastWatchedSec?: number
   progress: number // 0 ~ 1
 }
 
