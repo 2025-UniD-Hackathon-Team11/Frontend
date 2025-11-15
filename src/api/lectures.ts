@@ -243,7 +243,7 @@ export async function fetchLectureList(): Promise<LectureSummary[]> {
       const lastWatchedSec = typeof progressMap[id] === 'number' ? progressMap[id] : (it.last_position ?? 0)
       const progress = durationSec > 0 ? Math.min(1, Math.max(0, lastWatchedSec / durationSec)) : 0
       // Normalize thumbnail path to absolute URL (supports http(s), '/path', or 'path')
-      const thumbnailUrl = toAbsoluteUrl(String(it.thumbnail || '/vite.svg'))
+      const thumbnailUrl = toAbsoluteUrl(`/api/lectures/${it.id}/thumbnail`)
       return {
         id,
         title: it.title,
@@ -482,6 +482,12 @@ export async function fetchLectureMetadata(lectureNumericId: number): Promise<Le
     return generated
   }
   return frames
+}
+
+export const getVideoPosition = async (lastPosition:Number) => {
+  const json = await(await fetch(`${BACKEND_BASE}/api/lectures/1/last-position`, {method: 'PUT', body: JSON.stringify({last_position: lastPosition})})).json();
+  console.log(json);
+  return json;
 }
 
 

@@ -14,6 +14,7 @@ import type {
   PlayerAvatarState,
   PlayerState,
 } from '../types'
+import { getVideoPosition } from '../api/lectures'
 
 function wait(ms: number) {
   return new Promise((res) => setTimeout(res, ms))
@@ -28,6 +29,7 @@ export function LecturePlayerPage() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const videoRef = useRef<VideoPlayerHandle | null>(null)
+  const [timer, setTimer] = useState(0.0);
 
   const [playerState, setPlayerState] = useState<PlayerState>({
     lectureId,
@@ -99,7 +101,9 @@ export function LecturePlayerPage() {
     },
   })
 
-  const finalizeMicQuestion = (finalText: string) => {
+  
+
+  const finalizeMicQuestion = async (finalText: string) => {
     const question = (finalText || '').trim()
     if (question.length === 0) {
       setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
@@ -113,6 +117,8 @@ export function LecturePlayerPage() {
     }
     setChatMessages((msgs) => [...msgs, { role: 'user', content: question }])
     setPlayerState((s) => ({ ...s, avatarState: 'thinking' }))
+    const position = await getVideoPosition();
+    videoRef.current?.pause();
     ;(async () => {
       const res = await sendQuestion({
         lectureId,
@@ -125,10 +131,11 @@ export function LecturePlayerPage() {
       setCurrentAnswerResponse(res)
       setChatMessages((msgs) => [...msgs, { role: 'assistant', content: res.answerText }])
       setPlayerState((s) => ({ ...s, avatarState: 'talking' }))
+      let r;
       if (res.relatedFrames?.length) {
         const f = res.relatedFrames[0]
-        videoRef.current?.seekTo(f.startSec)
-        videoRef.current?.pause()
+        // stoppedTime = videoRef.current?.getCurrentTime();
+        // console.log(`스톱 시간: ${stoppedTime}`);
         setShowOverlay(f)
       }
       setCurrentAnswerAudioUrl(res.ttsUrl)
@@ -138,6 +145,8 @@ export function LecturePlayerPage() {
       }
       setShowOverlay(null)
       setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
+      videoRef.current?.seekTo(Number(position['last_position']));
+      videoRef.current?.play();
       setIsPlayheadPaused(false)
       micBusyRef.current = false
     })()
@@ -386,6 +395,7 @@ export function LecturePlayerPage() {
         'idx=', idx,
         'frameTime=', idx >= 0 ? frames[idx]?.timeSec : null
       )
+      setTimer(elapsedSec);
       if (idx !== prevIdxRef.current) {
         // eslint-disable-next-line no-console
         console.log('[page] switch frame ->', idx, idx >= 0 ? frames[idx]?.url : '(poster)')
@@ -696,8 +706,12 @@ export function LecturePlayerPage() {
     micBusyRef.current = false
   }
 
-  const onSendText = (textQ: string) => {
+  const onSendText = async (textQ: string) => {
     // text flow: do not pause video
+    console.log(videoRef);
+    const time = videoRef.current?.getCurrentTime();
+    const position = await getVideoPosition(time as number);
+    console.log(position);
     setChatMessages((msgs) => [...msgs, { role: 'user', content: textQ }])
     setPlayerState((s) => ({ ...s, avatarState: 'thinking', questionMode: 'text' }))
     setIsPlayheadPaused(true)
@@ -719,6 +733,8 @@ export function LecturePlayerPage() {
       await play()
       setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
       setIsPlayheadPaused(false)
+      videoRef.current?.seekTo(Number(position['last_position']));
+      videoRef.current?.play();
     })()
   }
 
