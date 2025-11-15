@@ -66,7 +66,7 @@ export function LecturePlayerPage() {
   // Calibration (오늘의 학습 상태) state
   const [showCalibration, setShowCalibration] = useState<boolean>(true)
   const [calStartAtMs, setCalStartAtMs] = useState<number | null>(null)
-  const [calWpm, setCalWpm] = useState<number | null>(null)
+  const [calWpm, setCalWpm] = useState<number>(0)
   const [calMode, setCalMode] = useState<DailyMode | null>(null)
   const MIN_SPEAK_MS = 3000
   const MIN_WORDS = 4
@@ -117,7 +117,6 @@ export function LecturePlayerPage() {
     }
     setChatMessages((msgs) => [...msgs, { role: 'user', content: question }])
     setPlayerState((s) => ({ ...s, avatarState: 'thinking' }))
-    const position = await getVideoPosition();
     videoRef.current?.pause();
     ;(async () => {
       const res = await sendQuestion({
@@ -145,8 +144,6 @@ export function LecturePlayerPage() {
       }
       setShowOverlay(null)
       setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
-      videoRef.current?.seekTo(Number(position['last_position']));
-      videoRef.current?.play();
       setIsPlayheadPaused(false)
       micBusyRef.current = false
     })()
@@ -227,7 +224,7 @@ export function LecturePlayerPage() {
 
   const beginCalibration = () => {
     autoSkippedRef.current = false
-    setCalWpm(null)
+    setCalWpm(0)
     setCalMode(null)
     setCalStartAtMs(performance.now())
     calStart()
@@ -879,6 +876,7 @@ export function LecturePlayerPage() {
                 setPlayerState((s) => ({ ...s, videoCurrentTime: t }))
               }
               onReady={() => {}}
+              calWpm={calWpm}
             />
           )}
           {subtitle ? (

@@ -13,6 +13,7 @@ type VideoPlayerProps = {
   isPausedExternally: boolean
   onTimeUpdate?: (currentTime: number) => void
   onReady?: (durationSec: number) => void
+  calWpm?: number
 }
 
 export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
@@ -31,6 +32,18 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
         } catch {}
         readyRef.current = true
         onReady?.(v.duration || 0)
+        const wpm = props.calWpm;
+        if(videoRef.current){
+          if(wpm as number < 90) {
+            v.playbackRate = 0.5;
+          }
+          else if(wpm as number <=140) {
+            v.playbackRate = 1;
+          }
+          else {
+            v.playbackRate = 1.5;
+          }
+        }
       }
       v.addEventListener('loadedmetadata', onLoaded)
       return () => {
