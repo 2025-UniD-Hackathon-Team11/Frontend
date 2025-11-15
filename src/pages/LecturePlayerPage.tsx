@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { fetchLectureDetail, fetchLectureMetadata, updateLectureProgress } from '../api/lectures'
+import { fetchLectureDetail, fetchLectureMetadata, updateLectureProgress, reportDailyMode } from '../api/lectures'
 import { sendQuestion } from '../api/qa'
 import { AvatarProfessor } from '../components/AvatarProfessor'
 import { QuestionPanel } from '../components/QuestionPanel'
@@ -124,9 +124,25 @@ export function LecturePlayerPage() {
     setPlayerState((s) => ({ ...s, avatarState: 'thinking' }))
     videoRef.current?.pause();
     ;(async () => {
+      const vtime = questionTimeSec ?? playerState.videoCurrentTime
+      const dm = playerState.dailyMode
+      const cond = dm === 'tired' ? 1 : dm === 'normal' ? 2 : 3
+      try {
+        // eslint-disable-next-line no-console
+        console.log('[LLM] ask payload:', {
+          lectureId,
+          videoTimeSec: vtime,
+          question,
+          mode: 'mic',
+          difficulty_mode: playerState.difficultyMode,
+          daily_mode: dm,
+          condition: cond,
+          condition_text: dm,
+        })
+      } catch {}
       const res = await sendQuestion({
         lectureId,
-        videoTimeSec: questionTimeSec ?? playerState.videoCurrentTime,
+        videoTimeSec: vtime,
         question,
         mode: 'mic',
         difficultyMode: playerState.difficultyMode,
@@ -238,14 +254,20 @@ export function LecturePlayerPage() {
     calStop()
   }
   const startLectureAfterCalibration = () => {
-    // If a mode is detected live, persist it before leaving
-    if (calMode) {
-      setPlayerState((s) => ({ ...s, dailyMode: calMode as DailyMode }))
-    }
+    // Decide final mode: if not detected, default to 'tired'
+    const finalMode: DailyMode = (calMode as DailyMode | null) ?? 'tired'
+    try {
+      const code = finalMode === 'tired' ? 1 : finalMode === 'normal' ? 2 : 3
+      // eslint-disable-next-line no-console
+      console.log('[page] reportDailyMode payload:', { mode_text: finalMode, mode: code })
+    } catch {}
+    setPlayerState((s) => ({ ...s, dailyMode: finalMode }))
     setShowCalibration(false)
     // unlock audio after user interaction
     setAudioUnlocked(true)
     setIsPlayheadPaused(false)
+    // Report today's learning status to backend (tired->1, normal->2, focus->3)
+    void reportDailyMode(finalMode)
   }
 
   // Preload multiple audios during calibration (lookahead)
@@ -719,9 +741,25 @@ export function LecturePlayerPage() {
     setIsPlayheadPaused(true)
     try { frameAudioRef.current?.pause() } catch {}
     ;(async () => {
+      const vtime = videoRef.current?.getCurrentTime() ?? 0
+      const dm = playerState.dailyMode
+      const cond = dm === 'tired' ? 1 : dm === 'normal' ? 2 : 3
+      try {
+        // eslint-disable-next-line no-console
+        console.log('[LLM] ask payload:', {
+          lectureId,
+          videoTimeSec: vtime,
+          question: textQ,
+          mode: 'text',
+          difficulty_mode: playerState.difficultyMode,
+          daily_mode: dm,
+          condition: cond,
+          condition_text: dm,
+        })
+      } catch {}
       const res = await sendQuestion({
         lectureId,
-        videoTimeSec: videoRef.current?.getCurrentTime() ?? 0,
+        videoTimeSec: vtime,
         question: textQ,
         mode: 'text',
         difficultyMode: playerState.difficultyMode,
@@ -874,7 +912,7 @@ export function LecturePlayerPage() {
             <VideoPlayer
               ref={videoRef}
               src={videoSrc}
-              initialTimeSec={detail.lastWatchedSec}
+              initialTimeSec={detail.lastWatchedSec ?? 0}
               isPausedExternally={playerState.avatarState !== 'idle'}
               posterUrl={framePosterUrl}
               onTimeUpdate={(t) =>
@@ -967,12 +1005,7 @@ export function LecturePlayerPage() {
               {isCalListening ? '녹음 종료' : '마이크 시작'}
             </button>
             <button
-              onClick={() => {
-                setShowCalibration(false)
-                setAudioUnlocked(true)
-                setIsPlayheadPaused(false)
-                try { console.log('[calibration] skipped -> audio unlocked, playhead resumed') } catch {}
-              }}
+              onClick={startLectureAfterCalibration}
               style={{
                 background: 'transparent',
                 color: '#111827',

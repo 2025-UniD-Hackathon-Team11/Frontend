@@ -320,8 +320,45 @@ export async function updateLectureProgress(
   saveProgress(map)
 }
 
-function delay(ms: number) {
-  return new Promise((res) => setTimeout(res, ms))
+// Report today's learning status (daily mode) to backend
+export async function reportDailyMode(mode: 'tired' | 'normal' | 'focus'): Promise<void> {
+  const modeCode = mode === 'tired' ? 1 : mode === 'normal' ? 2 : 3
+  const DAILY_MODE_URL =
+    (import.meta as any)?.env?.VITE_DAILY_MODE_URL?.replace(/\/$/, '') ||
+    `${BACKEND_BASE}/api/user/daily-mode`
+  const body = {
+    mode: modeCode,
+    mode_text: mode,
+    timestamp: new Date().toISOString(),
+  }
+  try {
+    // eslint-disable-next-line no-console
+    console.log('[api] reportDailyMode ->', DAILY_MODE_URL, body)
+  } catch {}
+  try {
+    const res = await fetch(DAILY_MODE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      const cloned = res.clone()
+      const text = await cloned.text().catch(() => '')
+      try {
+        // eslint-disable-next-line no-console
+        console.warn('[api] reportDailyMode non-OK:', {
+          status: res.status,
+          url: DAILY_MODE_URL,
+          snippet: text.slice(0, 200),
+        })
+      } catch {}
+    }
+  } catch (e) {
+    try {
+      // eslint-disable-next-line no-console
+      console.warn('[api] reportDailyMode failed:', e)
+    } catch {}
+  }
 }
 
 export type LectureFrame = { timeSec: number; url: string; audioUrl?: string; text?: string }
