@@ -1,4 +1,7 @@
 import type { DailyMode, DifficultyMode, PlayerAvatarState } from '../types'
+import { Canvas } from '@react-three/fiber';
+import { Stats, OrbitControls } from '@react-three/drei'
+import Model from './Model';
 
 export function AvatarProfessor(props: {
   state: PlayerAvatarState
@@ -55,65 +58,11 @@ export function AvatarProfessor(props: {
             border: `2px solid ${accent}`,
           }}
         >
-          {/* Head */}
-          <div
-            style={{
-              position: 'absolute',
-              top: 22,
-              left: 60,
-              width: 60,
-              height: 60,
-              borderRadius: '50%',
-              background: '#FFE7BA',
-              border: '2px solid #d9d9d9',
-              transform: state === 'listening' ? 'rotate(-6deg)' : state === 'idle' ? 'rotate(3deg)' : 'none',
-              transition: 'transform 200ms ease',
-            }}
-          />
-          {/* Body */}
-          <div
-            style={{
-              position: 'absolute',
-              top: 78,
-              left: 38,
-              width: 104,
-              height: 96,
-              borderRadius: 12,
-              background: '#F0F5FF',
-              border: '2px solid #d6e4ff',
-            }}
-          />
-          {/* Left arm (pointer) */}
-          <div
-            style={{
-              position: 'absolute',
-              top: 96,
-              left: 18,
-              width: 60,
-              height: 10,
-              borderRadius: 5,
-              background: '#ffd6e7',
-              transform: state === 'idle' ? 'rotate(-15deg)' : state === 'talking' ? 'rotate(-5deg)' : 'rotate(0deg)',
-              transformOrigin: 'right',
-              transition: 'transform 180ms ease',
-            }}
-          />
-          {/* Right arm (listening) */}
-          <div
-            style={{
-              position: 'absolute',
-              top: 96,
-              right: 18,
-              width: 60,
-              height: 10,
-              borderRadius: 5,
-              background: '#ffd6e7',
-              transform:
-                state === 'listening' ? 'rotate(25deg)' : 'rotate(5deg)',
-              transformOrigin: 'left',
-              transition: 'transform 180ms ease',
-            }}
-          />
+          <Canvas>
+            <Stats />
+            <ambientLight intensity={0.5} />
+            <Model />
+          </Canvas>
 
           {/* Chat bubble for answering */}
           {state === 'talking' && speakingTextSnippet ? (
