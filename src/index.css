@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Minimal global base to get Apple-like clean look */
+:root {
+  --bg: #ffffff;
+  --ink: #111827;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: Inter, Pretendard, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica Neue, Arial, Noto Sans, Apple SD Gothic Neo, Apple SD 산돌고딕 Neo, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Simple float animations for glass objects */
+@keyframes float {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-8px); }
+  100% { transform: translateY(0px); }
+}
+@keyframes float-slow {
+  0% { transform: translateY(0px) translateX(0px); }
+  50% { transform: translateY(-6px) translateX(4px); }
+  100% { transform: translateY(0px) translateX(0px); }
+}
+.animate-float { animation: float 6s ease-in-out infinite; }
+.animate-float-slow { animation: float-slow 8s ease-in-out infinite; }
