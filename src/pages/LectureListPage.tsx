@@ -5,11 +5,15 @@ import { Link } from 'react-router-dom'
 import styled from 'styled-components';
 
 const Input = styled.input`
-  border: none;
-  background-color: #F5F5F5;
+  border: 1px solid black;
   border-radius: 10px;
   padding: 5px;
-  margin: 5px;
+  outline: none;
+  width: 30%;
+  background-color: white;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
 `;
 
 export function LectureListPage() {
@@ -40,7 +44,7 @@ export function LectureListPage() {
               textDecoration: 'none',
               color: 'inherit',
               background: '#fff',
-              border: '1px solid #f0f0f0',
+              border: '1px solid black',
               borderRadius: 8,
               overflow: 'hidden',
             }}
@@ -100,15 +104,18 @@ export function LectureListPage() {
   }
 
   return (
-    <div style={{ padding: 16, maxWidth: 1000, margin: '0 auto' }}>
-      <h2 style={{ marginTop: 0}}>DailyFit Lecture</h2>
-      <Input value={value} onChange={onChange}/>
+    <div style={{ padding: 16, maxWidth: 1000, margin: '0 auto'}}>
+      <div style={{marginBottom: '15px', position: 'fixed', left: '50%', transform: 'translateX(-50%)', top: '0', backgroundColor: 'black', width: '100%', padding: '20px', display: 'flex', flexDirection: 'row'}}>
+        <h2 style={{ marginTop: 0, fontSize: '20px', fontWeight: 'bolder', color: 'white' }}>DailyFit Lecture</h2>
+        <Input value={value} onChange={onChange} placeholder='검색'/>
+      </div>
       {loading && <div>로딩 중…</div>}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+          gridTemplateColumns: 'repeat(3, minmax(260px, 1fr))',
           gap: 12,
+          marginTop: '80px',
         }}
       >
         { value? filtered.map(f => (
