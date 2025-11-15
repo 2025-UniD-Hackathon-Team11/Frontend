@@ -72,6 +72,8 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions) {
   const restartCountRef = useRef<number>(0)
   const restartTimerRef = useRef<number | null>(null)
   const isStartingRef = useRef<boolean>(false)
+  const onEndLockRef = useRef<boolean>(false)
+  const onEndUnlockTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     const SpeechRecognitionCtor =
@@ -115,6 +117,16 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions) {
     }
 
     rec.onend = () => {
+      // prevent duplicate onend bursts (StrictMode/browser quirks)
+      if (onEndLockRef.current) {
+        try { console.log('[STT:onend] ignored (dup)') } catch {}
+        return
+      }
+      onEndLockRef.current = true
+      if (onEndUnlockTimerRef.current) window.clearTimeout(onEndUnlockTimerRef.current)
+      onEndUnlockTimerRef.current = window.setTimeout(() => {
+        onEndLockRef.current = false
+      }, 300)
       const shouldKeepListening = (options?.continuous ?? false) && !forcedStopRef.current
       try {
         // eslint-disable-next-line no-console
@@ -208,6 +220,7 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions) {
       rec.onresult = null as any
       rec.onend = null as any
       rec.onerror = null as any
+      if (onEndUnlockTimerRef.current) window.clearTimeout(onEndUnlockTimerRef.current)
       rec.onstart = null
       rec.onaudiostart = null
       rec.onsoundstart = null

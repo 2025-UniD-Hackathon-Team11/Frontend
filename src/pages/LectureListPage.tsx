@@ -2,30 +2,8 @@ import { useEffect, useState } from 'react'
 import { fetchLectureList } from '../api/lectures'
 import type { LectureSummary } from '../types'
 import { Link } from 'react-router-dom'
-import styled from 'styled-components';
 
 const categories = ['전체', '컴퓨터네트워크', '프론트엔드', '백엔드', 'DB', '운영체제', 'Mobile']
-
-const Input = styled.input`
-  border: 1px solid black;
-  border-radius: 10px;
-  padding: 5px;
-  outline: none;
-  width: 30%;
-  background-color: white;
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-`;
-
-const Button = styled.div`
-  border: none;
-  display: inline-block;
-  &.active {
-    color: #1b1b88;
-    font-weight: bold;
-  }
-`;
 
 export function LectureListPage() {
   const [items, setItems] = useState<LectureSummary[]>([])
@@ -33,6 +11,7 @@ export function LectureListPage() {
   const [value, setValue] = useState('');
   const [filtered, setFiltered] = useState<LectureSummary[]>([]);
   const [categoriedItems, setCitems] = useState<LectureSummary[]>([]);
+  const [selectedCat, setSelectedCat] = useState<string>('전체')
 
   useEffect(() => {
     let mounted = true
@@ -118,10 +97,8 @@ export function LectureListPage() {
 
   const onClick = (e:any) => {
     const val = e.target?.id;
-    const btns = document.querySelectorAll('.category');
-    btns.forEach(btn => btn.classList.remove('active'));
-    e.currentTarget.classList.add('active');
-    console.log(val);
+    setSelectedCat(val)
+    console.log(val)
     if(val != '전체') {
       const c = items.filter((item) => {
         return item.category == val;
@@ -132,49 +109,122 @@ export function LectureListPage() {
   }
 
   return (
-    <div style={{ padding: 16, maxWidth: 1000, margin: '0 auto'}}>
-      <div style={{marginBottom: '15px', position: 'fixed', left: '50%', transform: 'translateX(-50%)', top: '0', backgroundColor: 'black', width: '100%', padding: '20px', display: 'flex', flexDirection: 'row', zIndex: '3'}}>
-        <h2 style={{ marginTop: 0, fontSize: '20px', fontWeight: 'bolder', color: 'white' }}>DailyFit Lecture</h2>
-        <Input value={value} onChange={onChange} placeholder='검색'/>
-      </div>
-      <div style={{position: 'fixed', marginTop: '25px', transform: 'translateX(-50%)', top: '35px'}}>
-        <div style={{position: 'absolute', top: '10px', left: '50%', transform: 'translateX(-50%)', width: '100%', margin: '5px'}}>
-          {categories.map((c) => 
-            (<Button onClick={onClick} id={c} className='category' style={{marginRight: '10px', cursor: 'pointer'}}>{c}</Button>)
-          )}
+    <div
+      style={{
+        padding: 16,
+        maxWidth: 1200,
+        margin: '0 auto',
+        overflowX: 'hidden',
+        background: 'linear-gradient(180deg, #f7fafc 0%, #ffffff 40%, #f5fbff 100%)',
+        minHeight: '100vh',
+      }}
+    >
+      {/* Sticky header with search */}
+      <div
+        style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 3,
+          background: 'rgba(255,255,255,0.75)',
+          backdropFilter: 'blur(8px)',
+          WebkitBackdropFilter: 'blur(8px)',
+          color: '#111827',
+          borderRadius: 16,
+          padding: '14px 16px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          border: '1px solid rgba(17,24,39,0.08)',
+          boxShadow: '0 8px 24px rgba(17,24,39,0.06)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, letterSpacing: -0.2 }}>UrunFit</h2>
+          <span style={{ color: '#6b7280', fontSize: 12 }}>오늘의 나에게 맞춘 AI 강의</span>
         </div>
-        {loading && <div>로딩 중…</div>}
-        <div
+        <input
+          value={value}
+          onChange={onChange}
+          placeholder='검색'
           style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(3, minmax(260px, 1fr))',
-            gap: 12,
-            marginTop: '50px'
+            border: '1px solid rgba(17,24,39,0.12)',
+            borderRadius: 12,
+            padding: '10px 12px',
+            outline: 'none',
+            width: 'min(360px, 50%)',
+            backgroundColor: 'white',
+            color: '#111827',
+            boxShadow: '0 3px 10px rgba(0,0,0,0.04) inset',
           }}
-        >
-          { value? filtered.map((f) => (
-            <ItemContent 
-              id={f.id}
-              thumbnailUrl={f.thumbnailUrl}
-              title={f.title}
-              description={f.description}
-              durationSec={f.durationSec}
-              progress={f.progress}
-            />
-          )) : categoriedItems.map((L) => (
-              <ItemContent 
-                id={L.id}
-                thumbnailUrl={L.thumbnailUrl}
-                title={L.title}
-                description={L.description}
-                durationSec={L.durationSec}
-                progress={L.progress}
-              />
-          ))}
-        </div>
+        />
+      </div>
+
+      {/* Sticky categories bar */}
+      <div
+        style={{
+          position: 'sticky',
+          top: 58,
+          zIndex: 2,
+          background: 'rgba(255,255,255,0.8)',
+          backdropFilter: 'blur(6px)',
+          WebkitBackdropFilter: 'blur(6px)',
+          border: '1px solid rgba(17,24,39,0.08)',
+          borderRadius: 14,
+          padding: '10px 12px',
+          marginTop: 12,
+          overflowX: 'auto',
+          whiteSpace: 'nowrap',
+          boxShadow: '0 6px 18px rgba(17,24,39,0.05)',
+        }}
+      >
+        {categories.map((c) => (
+          <button
+            key={c}
+            type="button"
+            onClick={onClick}
+            id={c}
+            style={{
+              marginRight: 10,
+              cursor: 'pointer',
+              background: selectedCat === c ? 'rgba(99,102,241,0.10)' : 'transparent',
+              border: selectedCat === c ? '1px solid rgba(99,102,241,0.25)' : '1px solid transparent',
+              borderRadius: 999,
+              padding: '6px 10px',
+              display: 'inline-block',
+              color: selectedCat === c ? '#4f46e5' : '#111827',
+              fontWeight: selectedCat === c ? ('bold' as any) : 500,
+            }}
+          >
+            {c}
+          </button>
+        ))}
+      </div>
+
+      {loading && <div style={{ marginTop: 16 }}>로딩 중…</div>}
+
+      {/* Grid list */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+          gap: 12,
+          marginTop: 16,
+          alignItems: 'stretch',
+        }}
+      >
+        {(value ? filtered : categoriedItems).map((L) => (
+          <ItemContent
+            key={L.id}
+            id={L.id}
+            thumbnailUrl={L.thumbnailUrl}
+            title={L.title}
+            description={L.description}
+            durationSec={L.durationSec}
+            progress={L.progress}
+          />
+        ))}
       </div>
     </div>
   )
 }
-
-

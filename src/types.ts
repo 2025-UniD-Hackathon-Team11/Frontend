@@ -43,5 +43,3 @@ export type LectureSegment = {
   content: string
   durationMs: number
 }
-
-

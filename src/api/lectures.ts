@@ -1,5 +1,15 @@
 import type { LectureSummary } from '../types'
 
+// Backend endpoint (public)
+const BACKEND_BASE = 'http://home.rocknroll17.com:8000'
+const LECTURE_LIST_URL = `${BACKEND_BASE}/api/lectures`
+function toAbsoluteUrl(path: string): string {
+  if (!path) return ''
+  if (/^https?:\/\//i.test(path)) return path
+  if (path.startsWith('/')) return `${BACKEND_BASE}${path}`
+  return `${BACKEND_BASE}/${path}`
+}
+
 // In-memory mock lectures; progress persisted to localStorage for the demo
 const LECTURES: LectureSummary[] = [
   {
@@ -210,22 +220,93 @@ function saveProgress(map: Record<string, number>) {
 }
 
 export async function fetchLectureList(): Promise<LectureSummary[]> {
-  await delay(200)
+  try {
+    // eslint-disable-next-line no-console
+    console.log('[api] fetchLectureList ->', LECTURE_LIST_URL)
+  } catch {}
   const progressMap = loadProgress()
-  return LECTURES.map((L) => {
-    const last = progressMap[L.id] ?? L.lastWatchedSec
-    const clamped = Math.max(0, Math.min(L.durationSec, last))
-    const prog = L.durationSec ? Math.min(1, clamped / L.durationSec) : 0
-    return { ...L, lastWatchedSec: clamped, progress: prog }
-  })
+  try {
+    const res = await fetch(LECTURE_LIST_URL, { method: 'GET' })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data: Array<{
+      id: number
+      title: string
+      thumbnail: string
+      duration: number
+      last_position: number
+    }> = await res.json()
+    const remoteMapped: LectureSummary[] = data.map((it) => {
+      const id = String(it.id)
+      const durationSec = it.duration ?? 0
+      const lastWatchedSec = typeof progressMap[id] === 'number' ? progressMap[id] : (it.last_position ?? 0)
+      const progress = durationSec > 0 ? Math.min(1, Math.max(0, lastWatchedSec / durationSec)) : 0
+      // If backend serves thumbnails under a static path, adjust here if needed.
+      const thumbnailUrl = it.thumbnail?.startsWith('http') ? it.thumbnail : it.thumbnail ?? '/vite.svg'
+      return {
+        id,
+        title: it.title,
+        description: '', // backend payload has no description; keep minimal
+        thumbnailUrl,
+        durationSec,
+        lastWatchedSec,
+        progress,
+        // backend에는 카테고리가 없으므로 기본값
+        category: '전체' as any,
+      }
+    })
+    // Local list with persisted progress
+    const localWithProgress: LectureSummary[] = LECTURES.map((L) => {
+      const last = progressMap[L.id] ?? L.lastWatchedSec ?? 0
+      const clamped = Math.max(0, Math.min(L.durationSec, last))
+      const prog = L.durationSec ? Math.min(1, clamped / L.durationSec) : 0
+      return { ...L, lastWatchedSec: clamped, progress: prog }
+    })
+    // Merge local and remote (local first, remote overrides same id)
+    const byId = new Map<string, LectureSummary>()
+    for (const item of localWithProgress) byId.set(item.id, item)
+    for (const item of remoteMapped) byId.set(item.id, item)
+    const mapped = Array.from(byId.values())
+    try {
+      // eslint-disable-next-line no-console
+      console.log('[api] fetchLectureList OK (merged):', mapped.map((m) => m.id))
+    } catch {}
+    return mapped
+  } catch {
+    // Fallback to static mock if backend is unreachable
+    const list = LECTURES
+    return list.map((L) => {
+      const last = progressMap[L.id] ?? L.lastWatchedSec
+      const clamped = Math.max(0, Math.min(L.durationSec, last))
+      const prog = L.durationSec ? Math.min(1, clamped / L.durationSec) : 0
+      return { ...L, lastWatchedSec: clamped, progress: prog }
+    })
+  }
 }
 
 export async function fetchLectureDetail(lectureId: string): Promise<LectureSummary> {
-  await delay(150)
   const all = await fetchLectureList()
   const found = all.find((l) => l.id === lectureId)
-  if (!found) throw new Error('Lecture not found')
-  return found
+  if (found) {
+    try {
+      // eslint-disable-next-line no-console
+      console.log('[api] fetchLectureDetail found:', lectureId)
+    } catch {}
+    return found
+  }
+  // Not found: log available ids and attempt legacy fallback ids
+  try {
+    // eslint-disable-next-line no-console
+    console.warn('[api] fetchLectureDetail not found:', lectureId, 'available:', all.map((x) => x.id))
+  } catch {}
+  const legacy = LECTURES.find((l) => l.id === lectureId)
+  if (legacy) {
+    try {
+      // eslint-disable-next-line no-console
+      console.warn('[api] using legacy fallback for id:', lectureId)
+    } catch {}
+    return legacy
+  }
+  throw new Error('Lecture not found')
 }
 
 export async function updateLectureProgress(
@@ -239,6 +320,166 @@ export async function updateLectureProgress(
 
 function delay(ms: number) {
   return new Promise((res) => setTimeout(res, ms))
+}
+
+export type LectureFrame = { timeSec: number; url: string; audioUrl?: string; text?: string }
+
+// Fetch timeline/frames metadata for a lecture
+export async function fetchLectureMetadata(lectureNumericId: number): Promise<LectureFrame[]> {
+  const url = `${BACKEND_BASE}/api/lectures/${lectureNumericId}/metadata`
+  try {
+    // eslint-disable-next-line no-console
+    console.log('[api] fetchLectureMetadata ->', url)
+  } catch {}
+  const res = await fetch(url, { method: 'GET' })
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`)
+  }
+  const raw = await res.json()
+  try {
+    // eslint-disable-next-line no-console
+    console.log(
+      '[api] fetchLectureMetadata raw:',
+      Array.isArray(raw) ? `array(len=${raw.length})` : Object.keys(raw || {}),
+      JSON.stringify(raw).slice(0, 600)
+    )
+  } catch {}
+  // Accept a few common shapes and normalize
+  let frames: LectureFrame[] = []
+  if (Array.isArray(raw)) {
+    frames = raw.map((it: any, idx: number) => ({
+      timeSec: Number(it.timeSec ?? it.time_sec ?? it.t ?? idx) || idx,
+      url: toAbsoluteUrl(String(it.url ?? it.frame ?? it.path ?? '')),
+    }))
+  } else if (raw && Array.isArray(raw.frames)) {
+    frames = raw.frames.map((it: any, idx: number) => {
+      const name = it.name ? String(it.name) : undefined
+      const urlFromName = name ? `${BACKEND_BASE}/api/lectures/${lectureNumericId}/frame/${name}` : ''
+      const audioName = it.audio ? String(it.audio) : undefined
+      const audioFromName = audioName ? `${BACKEND_BASE}/api/lectures/${lectureNumericId}/audio/${audioName}` : ''
+      // Normalize audio: if only filename is provided, always build absolute /api/lectures/{id}/audio/{file}
+      let normalizedAudio = ''
+      if (audioName) {
+        if (/^https?:\/\//i.test(audioName) || audioName.includes('/')) {
+          normalizedAudio = toAbsoluteUrl(audioName)
+        } else {
+          normalizedAudio = audioFromName
+        }
+      } else if (it.audioUrl || it.audio_url) {
+        normalizedAudio = toAbsoluteUrl(String(it.audioUrl ?? it.audio_url))
+      }
+      return {
+        timeSec: Number(it.start ?? it.timeSec ?? it.time_sec ?? it.time ?? it.t ?? idx) || idx,
+        url: toAbsoluteUrl(String(it.url ?? it.frame ?? it.path ?? urlFromName)),
+        audioUrl: normalizedAudio,
+        text: typeof it.text === 'string' ? it.text : (typeof it.caption === 'string' ? it.caption : undefined),
+      }
+    })
+    // If narrations array exists, ensure each narration has an exact frame at its start time
+    if (Array.isArray(raw.narrations)) {
+      try {
+        // eslint-disable-next-line no-console
+        console.log('[api] narrations count:', (raw.narrations as any[]).length)
+      } catch {}
+      type Narr = { audio?: string; text?: string; start?: number }
+      const narrs = (raw.narrations as Narr[]).map(n => ({
+        audio: n.audio,
+        text: n.text,
+        start: Number(n.start ?? 0) || 0,
+      })).sort((a, b) => a.start - b.start)
+      // ensure frames sorted
+      frames.sort((a, b) => a.timeSec - b.timeSec)
+      const byTime = new Map<number, LectureFrame>()
+      for (const f of frames) byTime.set(f.timeSec, f)
+      let inserted = 0
+      for (const n of narrs) {
+        const audioName = n.audio ? String(n.audio) : undefined
+        const audioAbs = audioName
+          ? `${BACKEND_BASE}/api/lectures/${lectureNumericId}/audio/${audioName}`
+          : undefined
+        const existing = byTime.get(n.start)
+        if (existing) {
+          if (audioAbs) existing.audioUrl = audioAbs
+          if (typeof n.text === 'string' && n.text.trim().length > 0) existing.text = n.text
+          continue
+        }
+        // find nearest preceding frame to borrow its image url
+        let urlPrev = frames.length ? frames[0].url : ''
+        for (let i = 0; i < frames.length; i++) {
+          if (frames[i].timeSec <= n.start) urlPrev = frames[i].url
+          else break
+        }
+        const nf: LectureFrame = {
+          timeSec: n.start,
+          url: urlPrev,
+          audioUrl: audioAbs,
+          text: typeof n.text === 'string' ? n.text : undefined,
+        }
+        frames.push(nf)
+        byTime.set(n.start, nf)
+        inserted += 1
+      }
+      frames.sort((a, b) => a.timeSec - b.timeSec)
+      try {
+        // eslint-disable-next-line no-console
+        console.log(
+          '[api] narrations ensured -> inserted:',
+          inserted,
+          'total frames:',
+          frames.length
+        )
+      } catch {}
+    }
+  } else if (raw && Array.isArray(raw.times) && raw.pattern) {
+    // Shape: { pattern: "/api/lectures/1/frame/frame_%d.jpg", times: [0,2,4,...] }
+    const pattern: string = String(raw.pattern)
+    const times: any[] = raw.times
+    frames = times.map((t: any, i: number) => {
+      const urlPat = pattern
+        .replace('%d', String(i))
+        .replace('{index}', String(i))
+        .replace('{i}', String(i))
+      return {
+        timeSec: Number(t) || i,
+        url: toAbsoluteUrl(urlPat),
+      }
+    })
+  } else if (raw && raw.pattern && (Number.isFinite(raw.count) || Array.isArray(raw.indices))) {
+    // Shape: { pattern, count, intervalSec? } or { pattern, indices: [0,1,2], intervalSec? }
+    const pattern: string = String(raw.pattern)
+    const intervalSec = Number(raw.intervalSec ?? raw.interval_sec ?? 1) || 1
+    const indices: number[] = Array.isArray(raw.indices)
+      ? raw.indices.map((x: any) => Number(x) || 0)
+      : Array.from({ length: Number(raw.count) || 0 }, (_, i) => i)
+    frames = indices.map((i, k) => {
+      const urlPat = pattern
+        .replace('%d', String(i))
+        .replace('{index}', String(i))
+        .replace('{i}', String(i))
+      return { timeSec: k * intervalSec, url: toAbsoluteUrl(urlPat) }
+    })
+  }
+  frames = frames.filter((f) => !!f.url).sort((a, b) => a.timeSec - b.timeSec)
+  try {
+    // eslint-disable-next-line no-console
+    console.log('[api] fetchLectureMetadata OK frames:', frames.length)
+  } catch {}
+  if (frames.length === 0) {
+    // Fallback: synthesize a simple timeline using a conventional pattern
+    const fallbackPattern = `${BACKEND_BASE}/api/lectures/${lectureNumericId}/frame/frame_%d.jpg`
+    const fallbackCount = 60 // 60 frames, 1s interval → 1 minute demo
+    const fallbackInterval = 1
+    const generated: LectureFrame[] = Array.from({ length: fallbackCount }, (_, i) => ({
+      timeSec: i * fallbackInterval,
+      url: fallbackPattern.replace('%d', String(i)),
+    }))
+    try {
+      // eslint-disable-next-line no-console
+      console.warn('[api] metadata empty → using fallback pattern:', fallbackPattern, 'count=', fallbackCount)
+    } catch {}
+    return generated
+  }
+  return frames
 }
 
 
