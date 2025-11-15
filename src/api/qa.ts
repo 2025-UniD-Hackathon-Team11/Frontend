@@ -1,4 +1,4 @@
-import type { AnswerResponse, DailyMode, DifficultyMode } from '../types'
+import type { AnswerResponse, DailyMode, DifficultyMode, QuizItem } from '../types'
 
 const BACKEND_BASE = 'http://home.rocknroll17.com:8000'
 
@@ -106,6 +106,84 @@ export async function sendQuestion(params: {
       relatedFrames,
       resumePlan,
     }
+  }
+}
+
+export async function generateQuiz(params: {
+  lectureId: string
+  untilTimeSec: number
+  numQuestions?: number
+  difficultyMode: DifficultyMode
+  dailyMode: DailyMode
+}): Promise<QuizItem[]> {
+  const QUIZ_URL =
+    (import.meta as any)?.env?.VITE_QUIZ_URL?.replace(/\/$/, '') ||
+    `${BACKEND_BASE}/api/llm/quiz`
+  const body = {
+    lecture_id: params.lectureId,
+    until_time_sec: params.untilTimeSec,
+    num_questions: params.numQuestions ?? 3,
+    difficulty_mode: params.difficultyMode,
+    daily_mode: params.dailyMode,
+    condition: params.dailyMode === 'tired' ? 1 : params.dailyMode === 'normal' ? 2 : 3,
+    condition_text: params.dailyMode,
+  }
+  try {
+    // eslint-disable-next-line no-console
+    console.log('[qa] generateQuiz -> POST', QUIZ_URL, body)
+  } catch {}
+  try {
+    const res = await fetch(QUIZ_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const rawText = await res.clone().text().catch(() => '')
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} ${rawText.slice(0, 240)}`)
+    }
+    const data: any = await res.json().catch(() => ({}))
+    // Accept flexible shapes:
+    // { items: [{ id, question, options, correct_index, explanation }]}
+    // or array directly.
+    const arr: any[] = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : [])
+    const normalized: QuizItem[] = arr.map((q: any, i: number) => ({
+      id: String(q.id ?? `q${i + 1}`),
+      question: String(q.question ?? q.q ?? '문제가 전달되지 않았습니다.'),
+      options: Array.isArray(q.options) ? q.options.map((o: any) => String(o)) : (Array.isArray(q.choices) ? q.choices.map((o: any) => String(o)) : undefined),
+      correctIndex: typeof q.correctIndex === 'number' ? q.correctIndex : (typeof q.correct_index === 'number' ? q.correct_index : undefined),
+      explanation: typeof q.explanation === 'string' ? q.explanation : undefined,
+    }))
+    try {
+      // eslint-disable-next-line no-console
+      console.log('[qa] generateQuiz normalized:', normalized)
+    } catch {}
+    return normalized
+  } catch (e) {
+    try { console.warn('[qa] generateQuiz fallback due to error:', e) } catch {}
+    // Simple mock quiz fallback
+    const base: QuizItem[] = [
+      {
+        id: 'q1',
+        question: '방금 강의에서 다룬 핵심 개념은 무엇이었나요?',
+        options: ['TCP 3-way Handshake', 'Bubble Sort', '메모리 페이징', '디자인 패턴 팩토리'],
+        correctIndex: 0,
+        explanation: '예시 문제입니다. 실제 환경에서는 LLM이 생성합니다.',
+      },
+      {
+        id: 'q2',
+        question: '핵심 용어와 가장 관련이 깊은 선택지를 고르세요.',
+        options: ['SYN/ACK', 'map/filter', 'linear regression', 'kernel trick'],
+        correctIndex: 0,
+      },
+      {
+        id: 'q3',
+        question: '다음 중 강의에서 설명된 개념의 목적은?',
+        options: ['연결 성립과 신뢰성 확보', '정렬 최적화', 'GPU 가속', '암호화'],
+        correctIndex: 0,
+      },
+    ]
+    return base.slice(0, Math.max(1, Math.min(5, params.numQuestions ?? 3)))
   }
 }
 

@@ -43,3 +43,12 @@ export type LectureSegment = {
   content: string
   durationMs: number
 }
+
+// Quiz
+export type QuizItem = {
+  id: string
+  question: string
+  options?: string[]
+  correctIndex?: number
+  explanation?: string
+}

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { fetchLectureDetail, fetchLectureMetadata, updateLectureProgress, reportDailyMode } from '../api/lectures'
-import { sendQuestion } from '../api/qa'
+import { sendQuestion, generateQuiz } from '../api/qa'
 import { AvatarProfessor } from '../components/AvatarProfessor'
 import { QuestionPanel } from '../components/QuestionPanel'
 import { VideoPlayer, type VideoPlayerHandle } from '../components/VideoPlayer'
@@ -14,14 +14,11 @@ import type {
   PlayerAvatarState,
   PlayerState,
 } from '../types'
-import { getVideoPosition } from '../api/lectures'
-
-function wait(ms: number) {
-  return new Promise((res) => setTimeout(res, ms))
-}
+import type { QuizItem } from '../types'
 
 export function LecturePlayerPage() {
   const { lectureId = '' } = useParams()
+  const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const [detail, setDetail] = useState<Awaited<
     ReturnType<typeof fetchLectureDetail>
@@ -29,7 +26,7 @@ export function LecturePlayerPage() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const videoRef = useRef<VideoPlayerHandle | null>(null)
-  const [timer, setTimer] = useState(0.0);
+ 
 
   const [playerState, setPlayerState] = useState<PlayerState>({
     lectureId,
@@ -55,6 +52,7 @@ export function LecturePlayerPage() {
   const [currentFrameIndex, setCurrentFrameIndex] = useState<number>(-1)
   const frameTimerRef = useRef<number | null>(null)
   const frameAudioRef = useRef<HTMLAudioElement | null>(null)
+  const isFrameAudioPlayingRef = useRef<boolean>(false)
   const [subtitle, setSubtitle] = useState<string>('')
   const [audioUnlocked, setAudioUnlocked] = useState<boolean>(false)
   const [pendingAudioUrl, setPendingAudioUrl] = useState<string | null>(null)
@@ -79,10 +77,119 @@ export function LecturePlayerPage() {
   const MIC_DEBOUNCE_MS = 300
   const micFinalizeTimerRef = useRef<number | null>(null)
 
+  // Quiz state
+  const [showQuiz, setShowQuiz] = useState<boolean>(false)
+  const [quizLoading, setQuizLoading] = useState<boolean>(false)
+  const [quizItems, setQuizItems] = useState<QuizItem[]>([])
+  const [quizIndex, setQuizIndex] = useState<number>(0)
+  const [quizSelected, setQuizSelected] = useState<Record<string, number>>({})
+  const [quizScore, setQuizScore] = useState<number | null>(null)
+  const [quizError, setQuizError] = useState<string | null>(null)
+  const [awaitingUnderstanding, setAwaitingUnderstanding] = useState<boolean>(false)
+  // Monotonic user-controlled playhead (not resetting on pause/resume)
+  const playheadStartMsRef = useRef<number>(performance.now())
+  const playheadOffsetSecRef = useRef<number>(0)
+  const isPausedRef = useRef<boolean>(false)
+  const [timelineDurationSec, setTimelineDurationSec] = useState<number>(0)
+  const [savedProgressSec, setSavedProgressSec] = useState<number | null>(null)
+  const getUserElapsedSec = () => {
+    return (
+      playheadOffsetSecRef.current +
+      (isPausedRef.current ? 0 : (performance.now() - playheadStartMsRef.current) / 1000)
+    )
+  }
+  const updatePlayheadPaused = (paused: boolean) => {
+    setIsPlayheadPaused(paused)
+    if (paused) {
+      if (!isPausedRef.current) {
+        playheadOffsetSecRef.current += (performance.now() - playheadStartMsRef.current) / 1000
+        isPausedRef.current = true
+      }
+    } else {
+      playheadStartMsRef.current = performance.now()
+      isPausedRef.current = false
+    }
+    try {
+      console.log('[user-timer] paused=', paused, 'elapsedSec=', getUserElapsedSec().toFixed(2), 'offsetSec=', playheadOffsetSecRef.current.toFixed(2))
+    } catch {}
+    // Persist progress locally when paused
+    if (paused && lectureId) {
+      const sec = getUserElapsedSec()
+      setSavedProgressSec(sec)
+      try {
+        localStorage.setItem(`uniD:progress:${lectureId}`, String(sec))
+        console.log('[progress] saved local sec=', sec.toFixed(2))
+      } catch {}
+    }
+  }
+  const formatTime = (sec: number) => {
+    const s = Math.max(0, Math.floor(sec))
+    const m = Math.floor(s / 60)
+    const r = s % 60
+    return `${m}:${String(r).padStart(2, '0')}`
+  }
+  const getPlaybackRate = (): number => {
+    const m = playerState.difficultyMode
+    if (m === 'basic') return 0.75
+    if (m === 'advanced') return 1.25
+    return 1
+  }
+  const pauseAllFrameAudios = () => {
+    try {
+      frameAudioRef.current?.pause()
+    } catch {}
+    try {
+      audioCacheRef.current.forEach((el) => {
+        try { el.pause() } catch {}
+      })
+    } catch {}
+  }
+  const seekToUserTime = (targetSec: number) => {
+    const dur = timelineDurationSec || 0
+    const clamped = Math.max(0, dur > 0 ? Math.min(targetSec, dur) : targetSec)
+    // Prevent overlapping sounds on seek
+    pauseAllFrameAudios()
+    setPendingAudioUrl(null)
+    playheadOffsetSecRef.current = clamped
+    playheadStartMsRef.current = performance.now()
+    // Immediate frame update for responsiveness
+    if (frames.length) {
+      let idx = -1
+      for (let i = 0; i < frames.length; i++) {
+        if (frames[i].timeSec <= clamped) idx = i
+        else break
+      }
+      setCurrentFrameIndex(idx)
+    }
+    if (!showImageInsteadOfVideo) {
+      try { videoRef.current?.seekTo(clamped) } catch {}
+      if (!isPausedRef.current && playerState.avatarState === 'idle') {
+        try { videoRef.current?.play() } catch {}
+      }
+    }
+    try { console.log('[seek] user-target-sec=', clamped.toFixed(2), 'duration=', dur.toFixed(2)) } catch {}
+  }
+
   // log playhead pause/resume toggles
   useEffect(() => {
     try { console.log('[playhead] paused =', isPlayheadPaused) } catch {}
   }, [isPlayheadPaused])
+  // continuous user-timer logging
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      try {
+        console.log(
+          '[user-timer] tick elapsedSec=',
+          getUserElapsedSec().toFixed(2),
+          'paused=',
+          isPausedRef.current,
+          'offsetSec=',
+          playheadOffsetSecRef.current.toFixed(2)
+        )
+      } catch {}
+    }, 500)
+    return () => window.clearInterval(id)
+  }, [])
 
   const { isListening, text, start, stop } = useSpeechRecognition({
     lang: 'ko-KR',
@@ -113,7 +220,7 @@ export function LecturePlayerPage() {
     if (!isFirstRender.current && question.length === 0) {
       setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
       videoRef.current?.play()
-      setIsPlayheadPaused(false)
+      updatePlayheadPaused(false)
       micBusyRef.current = false
       return
     }
@@ -151,7 +258,6 @@ export function LecturePlayerPage() {
       setCurrentAnswerResponse(res)
       setChatMessages((msgs) => [...msgs, { role: 'assistant', content: res.answerText }])
       setPlayerState((s) => ({ ...s, avatarState: 'talking' }))
-      let r;
       if (res.relatedFrames?.length) {
         const f = res.relatedFrames[0]
         // stoppedTime = videoRef.current?.getCurrentTime();
@@ -160,12 +266,12 @@ export function LecturePlayerPage() {
       }
       setCurrentAnswerAudioUrl(res.ttsUrl)
       await play()
-      if (res.resumePlan && (questionTimeSec ?? null) != null) {
-        await runBridgePhase(questionTimeSec as number, res.resumePlan)
-      }
+      // After answer: keep video paused and ask user if they understood
       setShowOverlay(null)
       setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
-      setIsPlayheadPaused(false)
+      videoRef.current?.pause()
+      updatePlayheadPaused(true)
+      setAwaitingUnderstanding(true)
       micBusyRef.current = false
     })()
   }
@@ -176,6 +282,7 @@ export function LecturePlayerPage() {
     if (!currentAnswerAudioUrl) return
     // recreate audio element inside hook by updating src via ref
     const a = new Audio(currentAnswerAudioUrl)
+    try { a.playbackRate = getPlaybackRate() } catch {}
     if (audioRef.current) {
       try {
         audioRef.current.pause()
@@ -190,10 +297,18 @@ export function LecturePlayerPage() {
   // Pause playhead while calibration is shown
   useEffect(() => {
     if (showCalibration) {
-      setIsPlayheadPaused(true)
+      updatePlayheadPaused(true)
       try { frameAudioRef.current?.pause() } catch {}
     }
   }, [showCalibration])
+
+  // When difficulty changes, update playbackRate of any active media
+  useEffect(() => {
+    const rate = getPlaybackRate()
+    try { if (frameAudioRef.current) frameAudioRef.current.playbackRate = rate } catch {}
+    try { if (audioRef.current) audioRef.current.playbackRate = rate } catch {}
+    // video playbackRate is managed by VideoPlayer prop
+  }, [playerState.difficultyMode])
 
   // Secondary STT for calibration
   const {
@@ -265,7 +380,14 @@ export function LecturePlayerPage() {
     setShowCalibration(false)
     // unlock audio after user interaction
     setAudioUnlocked(true)
-    setIsPlayheadPaused(false)
+    // hold playhead; a timed start will kick in after calibration
+    // if resume is requested, we'll resume immediately
+    const wantResume = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('resume') : null
+    if (wantResume) {
+      updatePlayheadPaused(false)
+    } else {
+      updatePlayheadPaused(true)
+    }
     // Report today's learning status to backend (tired->1, normal->2, focus->3)
     void reportDailyMode(finalMode)
   }
@@ -347,6 +469,17 @@ export function LecturePlayerPage() {
       try {
         // eslint-disable-next-line no-console
         console.log('[page] LecturePlayerPage load id=', lectureId)
+        // Load saved local progress if exists
+        try {
+          const raw = lectureId ? localStorage.getItem(`uniD:progress:${lectureId}`) : null
+          if (raw != null && mounted) {
+            const v = parseFloat(raw)
+            if (Number.isFinite(v) && v >= 0) {
+              setSavedProgressSec(v)
+              console.log('[progress] loaded local sec=', v.toFixed(2))
+            }
+          }
+        } catch {}
         const d = await fetchLectureDetail(lectureId)
         if (!mounted) return
         setDetail(d)
@@ -363,6 +496,10 @@ export function LecturePlayerPage() {
                 first5: sorted.slice(0, 5),
               })
               setFrames(sorted)
+              const lastSec = sorted.length ? sorted[sorted.length - 1].timeSec : 0
+              if (Number.isFinite(lastSec) && lastSec > 0) {
+                setTimelineDurationSec(Math.max(lastSec, timelineDurationSec))
+              }
               setCurrentFrameIndex(-1) // start with poster until first start time
               setSubtitle('')
             } else {
@@ -393,24 +530,43 @@ export function LecturePlayerPage() {
       mounted = false
     }
   }, [lectureId])
-  // Drive frame switching based on an internal "playhead" timer
+  // Drive frame switching based on an internal "playhead" timer (monotonic, pause-resilient)
   useEffect(() => {
     if (!frames.length) return
     if (frameTimerRef.current) {
       window.clearInterval(frameTimerRef.current)
       frameTimerRef.current = null
     }
-    // choose a base tick (500ms) and advance to the frame whose timeSec <= elapsed
-    const startedAt = performance.now()
+    // Reset base for new frames set, but preserve accumulated offset
+    playheadStartMsRef.current = performance.now()
     const prevIdxRef = { current: -1 }
+    // Do an immediate sync to avoid skipping the first short frame
+    ;(() => {
+      const elapsedSec =
+        playheadOffsetSecRef.current +
+        (isPausedRef.current ? 0 : (performance.now() - playheadStartMsRef.current) / 1000)
+      let idx = -1
+      for (let i = 0; i < frames.length; i++) {
+        if (frames[i].timeSec <= elapsedSec) idx = i
+        else break
+      }
+      prevIdxRef.current = idx
+      setCurrentFrameIndex(idx)
+    })()
     frameTimerRef.current = window.setInterval(() => {
-      if (isPlayheadPaused) return
-      const elapsedSec = (performance.now() - startedAt) / 1000
+      // elapsed = accumulated offset + delta since last resume; stays constant while paused
+      const elapsedSec =
+        playheadOffsetSecRef.current +
+        (isPausedRef.current ? 0 : (performance.now() - playheadStartMsRef.current) / 1000)
       // Find the largest index with timeSec <= elapsedSec
       let idx = -1
       for (let i = 0; i < frames.length; i++) {
         if (frames[i].timeSec <= elapsedSec) idx = i
         else break
+      }
+      // While current frame audio is playing, pin the frame index to avoid skipping the first sentence
+      if (isFrameAudioPlayingRef.current && prevIdxRef.current >= 0) {
+        idx = prevIdxRef.current
       }
       // eslint-disable-next-line no-console
       console.log(
@@ -419,21 +575,20 @@ export function LecturePlayerPage() {
         'idx=', idx,
         'frameTime=', idx >= 0 ? frames[idx]?.timeSec : null
       )
-      setTimer(elapsedSec);
       if (idx !== prevIdxRef.current) {
         // eslint-disable-next-line no-console
         console.log('[page] switch frame ->', idx, idx >= 0 ? frames[idx]?.url : '(poster)')
         prevIdxRef.current = idx
       }
       setCurrentFrameIndex(idx)
-    }, 500)
+    }, 100)
     return () => {
       if (frameTimerRef.current) {
         window.clearInterval(frameTimerRef.current)
         frameTimerRef.current = null
       }
     }
-  }, [frames, isPlayheadPaused])
+  }, [frames])
 
   // When frame changes, play audio (if any) and set subtitle
   useEffect(() => {
@@ -528,7 +683,8 @@ export function LecturePlayerPage() {
           }
           const url = candidates[idx]
           if (!audioUnlocked) {
-            setPendingAudioUrl(url)
+            // Preserve the earliest frame's pending audio until user unlocks
+            setPendingAudioUrl((prev) => (prev ? prev : url))
             try { console.log('[audio] pending (locked):', url) } catch {}
             return
           }
@@ -544,8 +700,14 @@ export function LecturePlayerPage() {
             audioCacheRef.current.set(url, el)
             cachedOrderRef.current.push(url)
           }
+          // stop any previously playing frame audio to avoid overlaps, then switch ref
+          const prev = frameAudioRef.current
+          if (prev && prev !== el) {
+            try { prev.pause() } catch {}
+          }
           frameAudioRef.current = el
           try { el.pause() } catch {}
+          try { el.playbackRate = getPlaybackRate() } catch {}
           el.currentTime = 0
           // attach verbose event handlers
           el.oncanplaythrough = () => { try { console.log('[audio] canplaythrough:', el.src) } catch {} }
@@ -553,8 +715,18 @@ export function LecturePlayerPage() {
           el.onwaiting = () => { try { console.log('[audio] waiting') } catch {} }
           el.onstalled = () => { try { console.log('[audio] stalled') } catch {} }
           el.onsuspend = () => { try { console.log('[audio] suspend') } catch {} }
-          el.onplay = () => { try { console.log('[audio] onplay:', el.src) } catch {} }
-          el.onended = () => { try { console.log('[audio] onended:', el.src) } catch {} }
+          el.onplay = () => {
+            isFrameAudioPlayingRef.current = true
+            try { console.log('[audio] onplay:', el.src) } catch {}
+          }
+          el.onpause = () => {
+            isFrameAudioPlayingRef.current = false
+            try { console.log('[audio] onpause:', el.src) } catch {}
+          }
+          el.onended = () => {
+            isFrameAudioPlayingRef.current = false
+            try { console.log('[audio] onended:', el.src) } catch {}
+          }
           el.onerror = (ev) => { try { console.warn('[audio] onerror:', el.src, ev) } catch {} }
           // eslint-disable-next-line no-console
           console.log('[page] try play ->', url)
@@ -573,7 +745,8 @@ export function LecturePlayerPage() {
       }
     }
     return () => {
-      // do not pause on every change; allow overlap if desired
+      // ensure previous audio is stopped when frame changes/unmounts
+      try { frameAudioRef.current?.pause() } catch {}
     }
   }, [currentFrameIndex, frames])
 
@@ -595,15 +768,16 @@ export function LecturePlayerPage() {
           frameAudioRef.current = new Audio()
         }
         const el = frameAudioRef.current
-        if (!el.onplay) el.onplay = () => { try { console.log('[audio] onplay:', el.src) } catch {} }
-        if (!el.onpause) el.onpause = () => { try { console.log('[audio] onpause:', el.src) } catch {} }
-        if (!el.onended) el.onended = () => { try { console.log('[audio] onended:', el.src) } catch {} }
+        if (!el.onplay) el.onplay = () => { isFrameAudioPlayingRef.current = true; try { console.log('[audio] onplay:', el.src) } catch {} }
+        if (!el.onpause) el.onpause = () => { isFrameAudioPlayingRef.current = false; try { console.log('[audio] onpause:', el.src) } catch {} }
+        if (!el.onended) el.onended = () => { isFrameAudioPlayingRef.current = false; try { console.log('[audio] onended:', el.src) } catch {} }
         if (!el.onerror) el.onerror = (ev) => { try { console.warn('[audio] onerror:', el.src, ev) } catch {} }
         el.preload = 'auto'
         el.crossOrigin = 'anonymous'
         el.muted = false
         el.volume = 1
         frameAudioRef.current.src = tryUrl
+        try { frameAudioRef.current.playbackRate = getPlaybackRate() } catch {}
         frameAudioRef.current.currentTime = 0
         try { console.log('[audio] unlock play ->', tryUrl) } catch {}
         void frameAudioRef.current.play().catch((e) => { try { console.warn('[audio] unlock play failed', e) } catch {} })
@@ -628,6 +802,14 @@ export function LecturePlayerPage() {
       if (playerState.lectureId) {
         updateLectureProgress(playerState.lectureId, playerState.videoCurrentTime)
       }
+      // save local progress on unmount
+      try {
+        const sec = getUserElapsedSec()
+        if (lectureId) {
+          localStorage.setItem(`uniD:progress:${lectureId}`, String(sec))
+          console.log('[progress] saved on unmount sec=', sec.toFixed(2))
+        }
+      } catch {}
       try {
         stopAudio()
       } catch {}
@@ -649,19 +831,64 @@ export function LecturePlayerPage() {
     return !!framePosterUrl
   }, [framePosterUrl])
 
-  async function runBridgePhase(
-    t_q: number,
-    plan: { freezeSec: number; resumeSec: number }
-  ) {
-    // Freeze phase: show frame at t_q
-    videoRef.current?.seekTo(t_q)
-    videoRef.current?.pause()
-    await wait(plan.freezeSec * 1000)
-    // Resume phase: play from t_q for resumeSec
-    videoRef.current?.seekTo(t_q)
-    videoRef.current?.play()
-    await wait(plan.resumeSec * 1000)
-  }
+  // Auto-seek to saved progress when requested from list page (?resume=1)
+  const resumeAppliedRef = useRef<boolean>(false)
+  useEffect(() => {
+    const wantResume = !!searchParams.get('resume')
+    if (!wantResume) return
+    if (savedProgressSec == null) return
+    // Seek once on intent
+    seekToUserTime(savedProgressSec)
+    try { console.log('[resume] auto-seek to', savedProgressSec.toFixed(2)) } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedProgressSec])
+  // Ensure resume is applied after frames are loaded (image mode)
+  useEffect(() => {
+    const wantResume = !!searchParams.get('resume')
+    if (!wantResume) return
+    if (resumeAppliedRef.current) return
+    if (savedProgressSec == null) return
+    if (frames.length === 0) return
+    seekToUserTime(savedProgressSec)
+    resumeAppliedRef.current = true
+    try { console.log('[resume] applied after frames load ->', savedProgressSec.toFixed(2)) } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frames.length, savedProgressSec])
+  // Ensure resume is applied after calibration overlay is dismissed
+  useEffect(() => {
+    const wantResume = !!searchParams.get('resume')
+    if (!wantResume) return
+    if (resumeAppliedRef.current) return
+    if (savedProgressSec == null) return
+    if (showCalibration) return
+    seekToUserTime(savedProgressSec)
+    resumeAppliedRef.current = true
+    try { console.log('[resume] applied after calibration ->', savedProgressSec.toFixed(2)) } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCalibration, savedProgressSec])
+
+  // After calibration ends (and not resuming), start first sentence 2s later from 0s
+  useEffect(() => {
+    const wantResume = !!searchParams.get('resume')
+    if (showCalibration) return
+    if (wantResume) return
+    // start only once when calibration is dismissed
+    let started = false
+    const id = window.setTimeout(() => {
+      if (started) return
+      started = true
+      // reset to beginning and start
+      seekToUserTime(0)
+      updatePlayheadPaused(false)
+      try { console.log('[start] first sentence after calibration (2s delay)') } catch {}
+    }, 2000)
+    return () => {
+      window.clearTimeout(id)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCalibration])
+
+ 
 
   if (loading || !detail) {
     return (
@@ -699,7 +926,7 @@ export function LecturePlayerPage() {
     setQuestionTimeSec(t_q)
     videoRef.current?.pause()
     setPlayerState((s) => ({ ...s, avatarState: 'listening', questionMode: 'mic' }))
-    setIsPlayheadPaused(true)
+    updatePlayheadPaused(true)
     try { frameAudioRef.current?.pause() } catch {}
     micBusyRef.current = true
     start()
@@ -731,15 +958,11 @@ export function LecturePlayerPage() {
   }
 
   const onSendText = async (textQ: string) => {
-    // text flow: do not pause video
-    console.log(videoRef);
-    const time = videoRef.current?.getCurrentTime();
-    const position = await getVideoPosition(time as number);
-    console.log(position);
     setChatMessages((msgs) => [...msgs, { role: 'user', content: textQ }])
     setPlayerState((s) => ({ ...s, avatarState: 'thinking', questionMode: 'text' }))
-    setIsPlayheadPaused(true)
+    updatePlayheadPaused(true)
     try { frameAudioRef.current?.pause() } catch {}
+    videoRef.current?.pause()
     ;(async () => {
       const vtime = videoRef.current?.getCurrentTime() ?? 0
       const dm = playerState.dailyMode
@@ -771,11 +994,91 @@ export function LecturePlayerPage() {
       // For text mode, keep playing video; just play TTS
       setCurrentAnswerAudioUrl(res.ttsUrl)
       await play()
+      // After answer: keep video paused and ask user if they understood
       setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
-      setIsPlayheadPaused(false)
-      videoRef.current?.seekTo(Number(position['last_position']));
-      videoRef.current?.play();
+      videoRef.current?.pause()
+      updatePlayheadPaused(true)
+      setAwaitingUnderstanding(true)
     })()
+  }
+
+  const onUnderstood = () => {
+    setAwaitingUnderstanding(false)
+    updatePlayheadPaused(false)
+    videoRef.current?.play()
+  }
+
+  const onExplainMore = async () => {
+    const followup = '좀 더 자세히 설명해줘.'
+    setChatMessages((msgs) => [...msgs, { role: 'user', content: followup }])
+    setPlayerState((s) => ({ ...s, avatarState: 'thinking', questionMode: 'text' }))
+    updatePlayheadPaused(true)
+    videoRef.current?.pause()
+    ;(async () => {
+      const vtime = (questionTimeSec ?? videoRef.current?.getCurrentTime() ?? 0) as number
+      const dm = playerState.dailyMode
+      const cond = dm === 'tired' ? 1 : dm === 'normal' ? 2 : 3
+      try {
+        // eslint-disable-next-line no-console
+        console.log('[LLM] follow-up payload:', {
+          lectureId,
+          videoTimeSec: vtime,
+          question: followup,
+          mode: 'text',
+          difficulty_mode: playerState.difficultyMode,
+          daily_mode: dm,
+          condition: cond,
+          condition_text: dm,
+        })
+      } catch {}
+      const res = await sendQuestion({
+        lectureId,
+        videoTimeSec: vtime,
+        question: followup,
+        mode: 'text',
+        difficultyMode: playerState.difficultyMode,
+        dailyMode: playerState.dailyMode,
+      })
+      setCurrentAnswerResponse(res)
+      setChatMessages((msgs) => [...msgs, { role: 'assistant', content: res.answerText }])
+      setPlayerState((s) => ({ ...s, avatarState: 'talking' }))
+      setCurrentAnswerAudioUrl(res.ttsUrl)
+      await play()
+      setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
+      videoRef.current?.pause()
+      updatePlayheadPaused(true)
+      setAwaitingUnderstanding(true)
+    })()
+  }
+
+  const onTogglePauseClick = () => {
+    if (awaitingUnderstanding) {
+      try { console.log('[pause] ignored: awaiting understanding choice') } catch {}
+      return
+    }
+    if (playerState.avatarState !== 'idle') {
+      try { console.log('[pause] ignored: avatar busy state', playerState.avatarState) } catch {}
+      return
+    }
+    const nextPaused = !isPausedRef.current && !isPlayheadPaused ? true : !isPlayheadPaused
+    if (nextPaused) {
+      updatePlayheadPaused(true)
+      try { frameAudioRef.current?.pause() } catch {}
+      videoRef.current?.pause()
+      try { console.log('[pause] -> paused', { elapsed: getUserElapsedSec().toFixed(2) }) } catch {}
+    } else {
+      updatePlayheadPaused(false)
+      // restart current sentence (frame audio) from the beginning on resume
+      try {
+        if (audioUnlocked && frameAudioRef.current && frameAudioRef.current.src) {
+          frameAudioRef.current.currentTime = 0
+          void frameAudioRef.current.play()
+          try { console.log('[pause] resume -> restart frame audio from beginning') } catch {}
+        }
+      } catch {}
+      videoRef.current?.play()
+      try { console.log('[pause] -> resumed', { elapsed: getUserElapsedSec().toFixed(2) }) } catch {}
+    }
   }
 
   const overlay =
@@ -800,21 +1103,65 @@ export function LecturePlayerPage() {
   return (
     <div style={{ padding: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
-        <h3 style={{ marginTop: 0, fontSize: 18 }}>{detail.title}</h3>
-        <button
-          onClick={() => navigate('/lectures')}
-          style={{
-            background: 'transparent',
-            border: '1px solid #e5e7eb',
-            color: '#111827',
-            borderRadius: 8,
-            padding: '6px 10px',
-            fontSize: 12,
-          }}
-          title="강의 목록으로 이동"
-        >
-          ← 강의 목록
-        </button>
+        <h3 style={{ marginTop: 0, fontSize: 18 }}>{detail?.title ?? ''}</h3>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            onClick={async () => {
+              // Open quiz modal and generate quiz via LLM
+              setShowQuiz(true)
+              setQuizLoading(true)
+              setQuizError(null)
+              setQuizScore(null)
+              setQuizIndex(0)
+              setQuizItems([])
+              try {
+                if (playerState.lectureId) {
+                  await updateLectureProgress(playerState.lectureId, playerState.videoCurrentTime)
+                }
+                try { frameAudioRef.current?.pause() } catch {}
+                videoRef.current?.pause()
+                const items = await generateQuiz({
+                  lectureId,
+                  untilTimeSec: playerState.videoCurrentTime,
+                  numQuestions: 3,
+                  difficultyMode: playerState.difficultyMode,
+                  dailyMode: playerState.dailyMode,
+                })
+                setQuizItems(items)
+              } catch (e: any) {
+                const msg = e?.message || String(e)
+                setQuizError(msg)
+              } finally {
+                setQuizLoading(false)
+              }
+            }}
+            style={{
+              background: '#111827',
+              border: '1px solid #111827',
+              color: '#ffffff',
+              borderRadius: 8,
+              padding: '6px 10px',
+              fontSize: 12,
+            }}
+            title="학습을 마치고 퀴즈로 점검하기"
+          >
+            학습 마치기
+          </button>
+          <button
+            onClick={() => navigate('/lectures')}
+            style={{
+              background: 'transparent',
+              border: '1px solid #e5e7eb',
+              color: '#111827',
+              borderRadius: 8,
+              padding: '6px 10px',
+              fontSize: 12,
+            }}
+            title="강의 목록으로 이동"
+          >
+            ← 강의 목록
+          </button>
+        </div>
       </div>
 
       {/* Difficulty selector */}
@@ -912,16 +1259,105 @@ export function LecturePlayerPage() {
             <VideoPlayer
               ref={videoRef}
               src={videoSrc}
-              initialTimeSec={detail.lastWatchedSec ?? 0}
+              initialTimeSec={(searchParams.get('resume') && savedProgressSec != null) ? savedProgressSec : (detail.lastWatchedSec ?? 0)}
               isPausedExternally={playerState.avatarState !== 'idle'}
               posterUrl={framePosterUrl}
               onTimeUpdate={(t) =>
                 setPlayerState((s) => ({ ...s, videoCurrentTime: t }))
               }
-              onReady={() => {}}
+              onReady={(durationSec) => {
+                if (Number.isFinite(durationSec) && durationSec > 0) {
+                  setTimelineDurationSec(Math.max(timelineDurationSec, durationSec))
+                }
+              }}
               calWpm={calWpm}
             />
           )}
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            {!audioUnlocked ? null : (
+              <button
+                onClick={onTogglePauseClick}
+                disabled={awaitingUnderstanding || playerState.avatarState !== 'idle'}
+                style={{
+                  background: isPlayheadPaused ? '#111827' : 'transparent',
+                  color: isPlayheadPaused ? '#fff' : '#111827',
+                  border: isPlayheadPaused ? '1px solid #111827' : '1px solid #e5e7eb',
+                  borderRadius: 8,
+                  padding: '6px 10px',
+                  fontSize: 12,
+                }}
+                title={isPlayheadPaused ? '재생' : '일시정지'}
+              >
+                {isPlayheadPaused ? '재생' : '일시정지'}
+              </button>
+            )}
+          </div>
+          {/* Seekable progress bar */}
+          <div style={{ marginTop: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ fontSize: 12, color: '#6b7280', minWidth: 44, textAlign: 'right' }}>
+                {formatTime(getUserElapsedSec())}
+              </div>
+              <div
+                onClick={(e) => {
+                  const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect()
+                  const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+                  const target = (timelineDurationSec || (frames.length ? frames[frames.length - 1]?.timeSec ?? 0 : 0)) * ratio
+                  seekToUserTime(target)
+                }}
+                style={{
+                  position: 'relative',
+                  flex: 1,
+                  height: 10,
+                  borderRadius: 6,
+                  background: '#f5f5f5',
+                  border: '1px solid #e5e7eb',
+                  cursor: 'pointer',
+                  overflow: 'hidden',
+                }}
+                title="원하는 위치로 이동"
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    width: `${(() => {
+                      const dur = timelineDurationSec || (frames.length ? frames[frames.length - 1]?.timeSec ?? 0 : 0)
+                      const elapsed = getUserElapsedSec()
+                      return dur > 0 ? Math.max(0, Math.min(100, (elapsed / dur) * 100)) : 0
+                    })()}%`,
+                    background: '#91d5ff',
+                    transition: 'width 200ms linear',
+                  }}
+                />
+                {/* saved progress marker */}
+                {(() => {
+                  const dur = timelineDurationSec || (frames.length ? frames[frames.length - 1]?.timeSec ?? 0 : 0)
+                  const sp = savedProgressSec ?? null
+                  const show = dur > 0 && sp != null && sp >= 0
+                  const leftPct = show ? Math.max(0, Math.min(100, (sp! / dur) * 100)) : 0
+                  return show ? (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        bottom: 0,
+                        left: `${leftPct}%`,
+                        width: 2,
+                        background: '#f59e0b',
+                        transform: 'translateX(-1px)',
+                        pointerEvents: 'none',
+                      }}
+                      title="저장된 진행 위치"
+                    />
+                  ) : null
+                })()}
+              </div>
+              <div style={{ fontSize: 12, color: '#6b7280', minWidth: 44 }}>
+                {formatTime(timelineDurationSec || (frames.length ? frames[frames.length - 1]?.timeSec ?? 0 : 0))}
+              </div>
+            </div>
+          </div>
           {subtitle ? (
             <div
               style={{
@@ -955,10 +1391,52 @@ export function LecturePlayerPage() {
             onMicStop={onMicStop}
             onSendText={onSendText}
             onTextModeStart={() => {
-              setIsPlayheadPaused(true)
+              updatePlayheadPaused(true)
               try { frameAudioRef.current?.pause() } catch {}
             }}
           />
+          {awaitingUnderstanding && (
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                background: 'rgba(255,255,255,0.9)',
+                border: '1px solid #e5e7eb',
+                borderRadius: 12,
+                padding: 10,
+              }}
+            >
+              <button
+                onClick={onUnderstood}
+                style={{
+                  background: '#111827',
+                  color: '#ffffff',
+                  border: '1px solid #111827',
+                  borderRadius: 8,
+                  padding: '8px 12px',
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+                title="이해 완료 후 계속 이어보기"
+              >
+                이해가 잘 되었어!
+              </button>
+              <button
+                onClick={onExplainMore}
+                style={{
+                  background: 'transparent',
+                  color: '#111827',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 8,
+                  padding: '8px 12px',
+                  fontSize: 12,
+                }}
+                title="좀 더 자세한 설명 듣기"
+              >
+                좀 더 설명이 필요해!
+              </button>
+            </div>
+          )}
         </div>
       </div>
     {showCalibration ? (
@@ -1101,6 +1579,198 @@ export function LecturePlayerPage() {
           ) : (
             <div style={{ marginTop: 12, color: '#6b7280', fontSize: 12 }}>
               녹음을 종료하면 WPM을 기반으로 오늘의 모드가 설정됩니다.
+            </div>
+          )}
+        </div>
+      </div>
+    ) : null}
+    {showQuiz ? (
+      <div
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 60,
+          background: 'rgba(0,0,0,0.45)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 16,
+        }}
+      >
+        <div
+          style={{
+            width: '100%',
+            maxWidth: 640,
+            borderRadius: 16,
+            background: 'white',
+            padding: 20,
+            boxShadow: '0 10px 30px rgba(0,0,0,0.15)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#111827' }}>퀴즈로 마무리</div>
+            <button
+              onClick={() => setShowQuiz(false)}
+              style={{
+                background: 'transparent',
+                border: '1px solid #e5e7eb',
+                borderRadius: 8,
+                padding: '6px 10px',
+                fontSize: 12,
+                color: '#111827',
+              }}
+            >
+              닫기
+            </button>
+          </div>
+          {quizLoading ? (
+            <div style={{ marginTop: 12, color: '#6b7280', fontSize: 14 }}>퀴즈 생성 중…</div>
+          ) : quizError ? (
+            <div style={{ marginTop: 12, color: '#d4380d', fontSize: 14 }}>
+              퀴즈를 불러오지 못했어요: {quizError}
+            </div>
+          ) : quizItems.length === 0 ? (
+            <div style={{ marginTop: 12, color: '#6b7280', fontSize: 14 }}>퀴즈가 없습니다.</div>
+          ) : quizScore != null ? (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#111827' }}>
+                점수: {quizScore} / {quizItems.length}
+              </div>
+              <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                <button
+                  onClick={() => {
+                    setShowQuiz(false)
+                    navigate('/lectures')
+                  }}
+                  style={{
+                    background: '#111827',
+                    border: '1px solid #111827',
+                    color: '#fff',
+                    borderRadius: 8,
+                    padding: '8px 12px',
+                    fontSize: 13,
+                  }}
+                >
+                  강의 목록으로 이동
+                </button>
+                <button
+                  onClick={() => {
+                    setQuizScore(null)
+                    setQuizIndex(0)
+                    setQuizSelected({})
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid #e5e7eb',
+                    color: '#111827',
+                    borderRadius: 8,
+                    padding: '8px 12px',
+                    fontSize: 13,
+                  }}
+                >
+                  다시 풀기
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 14, color: '#6b7280' }}>
+                총 {quizItems.length}문제 중 {quizIndex + 1}번째 문제
+              </div>
+              <div style={{ marginTop: 8, fontSize: 16, fontWeight: 600, color: '#111827', whiteSpace: 'pre-wrap' }}>
+                {quizItems[quizIndex].question}
+              </div>
+              {Array.isArray(quizItems[quizIndex].options) && quizItems[quizIndex].options!.length > 0 ? (
+                <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
+                  {quizItems[quizIndex].options!.map((opt, optIdx) => {
+                    const qid = quizItems[quizIndex].id
+                    const selected = quizSelected[qid]
+                    return (
+                      <label
+                        key={optIdx}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          border: '1px solid #e5e7eb',
+                          borderRadius: 8,
+                          padding: '8px 10px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name={`quiz-${qid}`}
+                          checked={selected === optIdx}
+                          onChange={() => {
+                            setQuizSelected((prev) => ({ ...prev, [qid]: optIdx }))
+                          }}
+                        />
+                        <span style={{ fontSize: 14, color: '#111827' }}>{opt}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div style={{ marginTop: 10, color: '#6b7280', fontSize: 14 }}>
+                  보기 없이 서술형 문제입니다. 메모해두고 스스로 답을 떠올려 보세요.
+                </div>
+              )}
+              <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <button
+                  onClick={() => setQuizIndex((i) => Math.max(0, i - 1))}
+                  disabled={quizIndex === 0}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid #e5e7eb',
+                    color: '#111827',
+                    borderRadius: 8,
+                    padding: '8px 12px',
+                    fontSize: 13,
+                  }}
+                >
+                  이전
+                </button>
+                {quizIndex < quizItems.length - 1 ? (
+                  <button
+                    onClick={() => setQuizIndex((i) => Math.min(quizItems.length - 1, i + 1))}
+                    style={{
+                      background: '#111827',
+                      border: '1px solid #111827',
+                      color: '#fff',
+                      borderRadius: 8,
+                      padding: '8px 12px',
+                      fontSize: 13,
+                    }}
+                  >
+                    다음
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => {
+                      // compute score
+                      let score = 0
+                      for (const q of quizItems) {
+                        if (typeof q.correctIndex === 'number' && Array.isArray(q.options)) {
+                          const sel = quizSelected[q.id]
+                          if (sel === q.correctIndex) score++
+                        }
+                      }
+                      setQuizScore(score)
+                    }}
+                    style={{
+                      background: '#111827',
+                      border: '1px solid #111827',
+                      color: '#fff',
+                      borderRadius: 8,
+                      padding: '8px 12px',
+                      fontSize: 13,
+                    }}
+                  >
+                    제출하고 채점
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>

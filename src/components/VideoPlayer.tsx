@@ -14,12 +14,13 @@ type VideoPlayerProps = {
   onTimeUpdate?: (currentTime: number) => void
   onReady?: (durationSec: number) => void
   posterUrl?: string
+  playbackRate?: number
   calWpm?: number
 }
 
 export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
   (props, ref) => {
-    const { src, initialTimeSec, isPausedExternally, onTimeUpdate, onReady, posterUrl } = props
+    const { src, initialTimeSec, isPausedExternally, onTimeUpdate, onReady, posterUrl, playbackRate = 1 } = props
     const videoRef = useRef<HTMLVideoElement | null>(null)
     const readyRef = useRef(false)
 
@@ -30,6 +31,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       const onLoaded = () => {
         try {
           v.currentTime = Math.max(0, Math.min(v.duration || 0, initialTimeSec))
+          v.playbackRate = playbackRate
         } catch {}
         readyRef.current = true
         onReady?.(v.duration || 0)
@@ -50,7 +52,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       return () => {
         v.removeEventListener('loadedmetadata', onLoaded)
       }
-    }, [initialTimeSec, onReady, props.calWpm])
+    }, [initialTimeSec, onReady, playbackRate, props.calWpm])
 
     useEffect(() => {
       const v = videoRef.current
@@ -59,6 +61,12 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
         v.pause()
       }
     }, [isPausedExternally])
+
+    useEffect(() => {
+      const v = videoRef.current
+      if (!v) return
+      try { v.playbackRate = playbackRate } catch {}
+    }, [playbackRate])
 
     useEffect(() => {
       const v = videoRef.current

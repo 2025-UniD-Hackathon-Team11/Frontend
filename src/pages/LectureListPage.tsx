@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchLectureList } from '../api/lectures'
 import type { LectureSummary } from '../types'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 
 const categories = ['전체', '컴퓨터네트워크', '프론트엔드', '백엔드', 'DB', '운영체제', 'Mobile']
 
@@ -12,14 +12,33 @@ export function LectureListPage() {
   const [filtered, setFiltered] = useState<LectureSummary[]>([]);
   const [categoriedItems, setCitems] = useState<LectureSummary[]>([]);
   const [selectedCat, setSelectedCat] = useState<string>('전체')
+  const navigate = useNavigate()
 
   useEffect(() => {
     let mounted = true
     fetchLectureList()
       .then((list) => {
         if (!mounted) return
-        setItems(list)
-        setCitems(list)
+        // Merge local saved progress into list
+        const merged = list.map((L) => {
+          try {
+            const raw = localStorage.getItem(`uniD:progress:${L.id}`)
+            if (raw != null) {
+              const sec = parseFloat(raw)
+              if (Number.isFinite(sec) && sec >= 0) {
+                const pLocal = L.durationSec > 0 ? Math.max(0, Math.min(1, sec / L.durationSec)) : 0
+                return {
+                  ...L,
+                  lastWatchedSec: sec,
+                  progress: Math.max(L.progress ?? 0, pLocal),
+                }
+              }
+            }
+          } catch {}
+          return L
+        })
+        setItems(merged)
+        setCitems(merged)
       })
       .finally(() => setLoading(false))
     return () => {
@@ -27,7 +46,7 @@ export function LectureListPage() {
     }
   }, [])
 
-  const ItemContent = ({id, thumbnailUrl, title, description, durationSec, progress}:LectureSummary) => {
+  const ItemContent = ({id, thumbnailUrl, title, description, durationSec, progress, lastWatchedSec}:LectureSummary) => {
     return (
       <Link
             key={id}
@@ -80,6 +99,29 @@ export function LectureListPage() {
                   ? '다시 보기'
                   : '이어보기'}
               </div>
+              {lastWatchedSec && lastWatchedSec > 0 && progress < 1 ? (
+                <div style={{ marginTop: 8 }}>
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      navigate(`/lecture/${id}?resume=1`)
+                    }}
+                    style={{
+                      background: '#111827',
+                      color: '#ffffff',
+                      border: '1px solid #111827',
+                      borderRadius: 8,
+                      padding: '6px 10px',
+                      fontSize: 12,
+                      fontWeight: 600,
+                    }}
+                    title="저장된 진행 위치로 이어보기"
+                  >
+                    저장된 진행 위치로 이어보기
+                  </button>
+                </div>
+              ) : null}
             </div>
           </Link>
     )
