@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { fetchLectureDetail, fetchLectureMetadata, updateLectureProgress } from '../api/lectures'
 import { sendQuestion } from '../api/qa'
 import { AvatarProfessor } from '../components/AvatarProfessor'
@@ -21,6 +21,7 @@ function wait(ms: number) {
 
 export function LecturePlayerPage() {
   const { lectureId = '' } = useParams()
+  const navigate = useNavigate()
   const [detail, setDetail] = useState<Awaited<
     ReturnType<typeof fetchLectureDetail>
   > | null>(null)
@@ -65,6 +66,16 @@ export function LecturePlayerPage() {
   const [calStartAtMs, setCalStartAtMs] = useState<number | null>(null)
   const [calWpm, setCalWpm] = useState<number | null>(null)
   const [calMode, setCalMode] = useState<DailyMode | null>(null)
+  const MIN_SPEAK_MS = 3000
+  const MIN_WORDS = 4
+  const WPM_TIRED_MAX = 90
+  const WPM_NORMAL_MAX = 140
+  const WPM_ABSURD_MAX = 1000
+  const autoSkippedRef = useRef<boolean>(false)
+  // Debounce for mic start/stop to avoid rapid toggle causing hook churn
+  const lastMicClickRef = useRef<number>(0)
+  const MIC_DEBOUNCE_MS = 300
+  const micFinalizeTimerRef = useRef<number | null>(null)
 
   // log playhead pause/resume toggles
   useEffect(() => {
@@ -73,8 +84,8 @@ export function LecturePlayerPage() {
 
   const { isListening, text, start, stop } = useSpeechRecognition({
     lang: 'ko-KR',
-    // Mic 질문 플로우는 한 번 듣고 끝나야 재클릭이 가능
-    continuous: false,
+    // 질문 모드도 연속으로 듣고, 사용자가 종료를 눌러야만 끝내도록
+    continuous: true,
     onEnd: (finalText) => {
       // Prevent double onEnd in React StrictMode
       const now = performance.now()
@@ -83,58 +94,54 @@ export function LecturePlayerPage() {
         return
       }
       lastOnEndTsRef.current = now
-      try {
-        // eslint-disable-next-line no-console
-        console.log('[STT:onEnd] finalText=', finalText)
-      } catch {}
-      // Mic flow end: send question
-      const question = finalText.trim()
-      if (question.length === 0) {
-        // resume idle
-        setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
-        videoRef.current?.play()
-        setIsPlayheadPaused(false)
-        micBusyRef.current = false
-        return
-      }
-      if (questionTimeSec == null) {
-        setQuestionTimeSec(playerState.videoCurrentTime)
-      }
-      setChatMessages((msgs) => [...msgs, { role: 'user', content: question }])
-      setPlayerState((s) => ({ ...s, avatarState: 'thinking' }))
-      ;(async () => {
-        const res = await sendQuestion({
-          lectureId,
-          videoTimeSec: questionTimeSec ?? playerState.videoCurrentTime,
-          question,
-          mode: 'mic',
-          difficultyMode: playerState.difficultyMode,
-          dailyMode: playerState.dailyMode,
-        })
-        setCurrentAnswerResponse(res)
-        setChatMessages((msgs) => [...msgs, { role: 'assistant', content: res.answerText }])
-        setPlayerState((s) => ({ ...s, avatarState: 'talking' }))
-        // Show related frames overlay and pause at frame start
-        if (res.relatedFrames?.length) {
-          const f = res.relatedFrames[0]
-          videoRef.current?.seekTo(f.startSec)
-          videoRef.current?.pause()
-          setShowOverlay(f)
-        }
-        setCurrentAnswerAudioUrl(res.ttsUrl)
-        await play()
-        // On TTS end: run bridge
-        if (res.resumePlan && (questionTimeSec ?? null) != null) {
-          await runBridgePhase(questionTimeSec as number, res.resumePlan)
-        }
-        setShowOverlay(null)
-        setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
-        setIsPlayheadPaused(false)
-        micBusyRef.current = false
-      })()
+      try { console.log('[STT:onEnd] finalText=', finalText) } catch {}
+      finalizeMicQuestion(finalText)
     },
   })
 
+  const finalizeMicQuestion = (finalText: string) => {
+    const question = (finalText || '').trim()
+    if (question.length === 0) {
+      setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
+      videoRef.current?.play()
+      setIsPlayheadPaused(false)
+      micBusyRef.current = false
+      return
+    }
+    if (questionTimeSec == null) {
+      setQuestionTimeSec(playerState.videoCurrentTime)
+    }
+    setChatMessages((msgs) => [...msgs, { role: 'user', content: question }])
+    setPlayerState((s) => ({ ...s, avatarState: 'thinking' }))
+    ;(async () => {
+      const res = await sendQuestion({
+        lectureId,
+        videoTimeSec: questionTimeSec ?? playerState.videoCurrentTime,
+        question,
+        mode: 'mic',
+        difficultyMode: playerState.difficultyMode,
+        dailyMode: playerState.dailyMode,
+      })
+      setCurrentAnswerResponse(res)
+      setChatMessages((msgs) => [...msgs, { role: 'assistant', content: res.answerText }])
+      setPlayerState((s) => ({ ...s, avatarState: 'talking' }))
+      if (res.relatedFrames?.length) {
+        const f = res.relatedFrames[0]
+        videoRef.current?.seekTo(f.startSec)
+        videoRef.current?.pause()
+        setShowOverlay(f)
+      }
+      setCurrentAnswerAudioUrl(res.ttsUrl)
+      await play()
+      if (res.resumePlan && (questionTimeSec ?? null) != null) {
+        await runBridgePhase(questionTimeSec as number, res.resumePlan)
+      }
+      setShowOverlay(null)
+      setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
+      setIsPlayheadPaused(false)
+      micBusyRef.current = false
+    })()
+  }
   const { play, stop: stopAudio, audioRef } = useAudioPlayer()
   const [currentAnswerAudioUrl, setCurrentAnswerAudioUrl] = useState<string | undefined>(undefined)
   useEffect(() => {
@@ -169,25 +176,48 @@ export function LecturePlayerPage() {
     stop: calStop,
   } = useSpeechRecognition({
     lang: 'ko-KR',
-    continuous: false,
+    // Keep listening until user explicitly stops, to avoid instant onend/no-speech toggles
+    continuous: true,
     onEnd: (finalText) => {
       const endMs = performance.now()
       const started = calStartAtMs ?? endMs
       const elapsedMs = Math.max(1, endMs - started)
       const totalWords = (finalText || '').trim().split(/\s+/).filter(Boolean).length
       const minutes = elapsedMs / 60000
-      const wpm = totalWords / (minutes || 1)
-      let mode: DailyMode = 'normal'
-      if (wpm < 80) mode = 'tired'
-      else if (wpm > 130) mode = 'focus'
+      const wpmRaw = totalWords / (minutes || 1)
+      const wpm = Number.isFinite(wpmRaw) ? wpmRaw : 0
+      // Only consider autoskip for absurd values after enough speech; avoid early tiny-denominator spikes
+      if (
+        wpm >= WPM_ABSURD_MAX &&
+        elapsedMs >= MIN_SPEAK_MS &&
+        totalWords >= Math.max(2, MIN_WORDS - 1) &&
+        !autoSkippedRef.current
+      ) {
+        autoSkippedRef.current = true
+        try { console.warn('[calibration] absurd wpm detected -> autoskip', wpm) } catch {}
+        startLectureAfterCalibration()
+        return
+      }
+      let mode: DailyMode | null = null
+      // Require minimum speaking time and words to reduce misclassification
+      if (elapsedMs >= MIN_SPEAK_MS && totalWords >= MIN_WORDS) {
+        if (wpm < WPM_TIRED_MAX) mode = 'tired'
+        else if (wpm <= WPM_NORMAL_MAX) mode = 'normal'
+        else mode = 'focus'
+      } else {
+        mode = null
+      }
       setCalWpm(Math.round(wpm))
       setCalMode(mode)
-      setPlayerState((s) => ({ ...s, dailyMode: mode }))
+      if (mode) {
+        setPlayerState((s) => ({ ...s, dailyMode: mode }))
+      }
       try { console.log('[calibration] end:', { wpm, mode, totalWords, elapsedMs }) } catch {}
     },
   })
 
   const beginCalibration = () => {
+    autoSkippedRef.current = false
     setCalWpm(null)
     setCalMode(null)
     setCalStartAtMs(performance.now())
@@ -197,6 +227,10 @@ export function LecturePlayerPage() {
     calStop()
   }
   const startLectureAfterCalibration = () => {
+    // If a mode is detected live, persist it before leaving
+    if (calMode) {
+      setPlayerState((s) => ({ ...s, dailyMode: calMode as DailyMode }))
+    }
     setShowCalibration(false)
     // unlock audio after user interaction
     setAudioUnlocked(true)
@@ -239,6 +273,40 @@ export function LecturePlayerPage() {
       }
     }
   }, [showCalibration, frames])
+
+  // Live WPM update during calibration based on accumulated calText
+  useEffect(() => {
+    if (!showCalibration) return
+    if (!calStartAtMs) return
+    const elapsedMs = Math.max(1, performance.now() - calStartAtMs)
+    const words = (calText || '').trim().split(/\s+/).filter(Boolean).length
+    const minutes = elapsedMs / 60000
+    const wpmRaw = words / (minutes || 1)
+    const wpm = Number.isFinite(wpmRaw) ? wpmRaw : 0
+    setCalWpm(Math.round(wpm))
+    if (
+      wpm >= WPM_ABSURD_MAX &&
+      elapsedMs >= MIN_SPEAK_MS &&
+      words >= Math.max(2, MIN_WORDS - 1) &&
+      !autoSkippedRef.current
+    ) {
+      autoSkippedRef.current = true
+      try { console.warn('[calibration] absurd wpm detected (live) -> autoskip', wpm) } catch {}
+      startLectureAfterCalibration()
+      return
+    }
+    // Update suggested mode live, but do not set playerState until user confirms
+    if (elapsedMs >= MIN_SPEAK_MS && words >= MIN_WORDS) {
+      let liveMode: DailyMode
+      if (wpm < WPM_TIRED_MAX) liveMode = 'tired'
+      else if (wpm <= WPM_NORMAL_MAX) liveMode = 'normal'
+      else liveMode = 'focus'
+      setCalMode(liveMode)
+    } else {
+      setCalMode(null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calText, showCalibration, calStartAtMs])
 
   useEffect(() => {
     let mounted = true
@@ -575,6 +643,12 @@ export function LecturePlayerPage() {
   }
 
   const onMicStart = () => {
+    const now = performance.now()
+    if (now - lastMicClickRef.current < MIC_DEBOUNCE_MS) {
+      try { console.log('[Mic] ignored: debounce') } catch {}
+      return
+    }
+    lastMicClickRef.current = now
     if (micBusyRef.current) {
       try { console.log('[Mic] ignored: busy') } catch {}
       return
@@ -598,11 +672,27 @@ export function LecturePlayerPage() {
   }
 
   const onMicStop = () => {
+    // Allow immediate stop (no debounce)
+    if (micFinalizeTimerRef.current) {
+      window.clearTimeout(micFinalizeTimerRef.current)
+      micFinalizeTimerRef.current = null
+    }
     try {
       // eslint-disable-next-line no-console
       console.log('[Mic] stop requested')
     } catch {}
     stop()
+    // Fallback finalize if onEnd doesn't arrive in time
+    micFinalizeTimerRef.current = window.setTimeout(() => {
+      setPlayerState((s) => {
+        if (s.avatarState === 'listening') {
+          try { console.warn('[Mic] finalize fallback (onEnd not fired)') } catch {}
+          finalizeMicQuestion(text || '')
+        }
+        return s
+      })
+      micFinalizeTimerRef.current = null
+    }, 800)
     micBusyRef.current = false
   }
 
@@ -653,23 +743,40 @@ export function LecturePlayerPage() {
 
   return (
     <div style={{ padding: 16 }}>
-      <h3 style={{ marginTop: 0 }}>{detail.title}</h3>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+        <h3 style={{ marginTop: 0, fontSize: 18 }}>{detail.title}</h3>
+        <button
+          onClick={() => navigate('/lectures')}
+          style={{
+            background: 'transparent',
+            border: '1px solid #e5e7eb',
+            color: '#111827',
+            borderRadius: 8,
+            padding: '6px 10px',
+            fontSize: 12,
+          }}
+          title="강의 목록으로 이동"
+        >
+          ← 강의 목록
+        </button>
+      </div>
 
       {/* Difficulty selector */}
       <div
         style={{
           marginBottom: 12,
           padding: 10,
-          background: '#fafafa',
-          border: '1px solid #f0f0f0',
-          borderRadius: 8,
+          background: 'rgba(255,255,255,0.9)',
+          border: '1px solid #e5e7eb',
+          borderRadius: 12,
           display: 'flex',
           alignItems: 'center',
           gap: 8,
           flexWrap: 'wrap',
+          boxShadow: '0 4px 14px rgba(17,24,39,0.06)',
         }}
       >
-        <div style={{ fontWeight: 600 }}>난이도 선택:</div>
+        <div style={{ fontWeight: 600, color: '#111827' }}>난이도 선택:</div>
         {(['basic', 'normal', 'advanced'] as DifficultyMode[]).map((m) => (
           <button
             key={m}
@@ -680,7 +787,12 @@ export function LecturePlayerPage() {
               }))
             }
             style={{
-              background: playerState.difficultyMode === m ? '#e6f7ff' : undefined,
+              background: playerState.difficultyMode === m ? '#eef2ff' : 'transparent',
+              border: '1px solid #e5e7eb',
+              borderRadius: 999,
+              padding: '6px 10px',
+              fontSize: 12,
+              color: '#111827',
             }}
           >
             {m === 'basic' ? '처음 배우는 내용' : m === 'advanced' ? '빠르게/깊게' : '보통'}
@@ -691,7 +803,7 @@ export function LecturePlayerPage() {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '2fr 1fr',
+          gridTemplateColumns: '3fr 2fr',
           gap: 16,
           alignItems: 'start',
         }}
@@ -720,7 +832,7 @@ export function LecturePlayerPage() {
                 borderRadius: 8,
                 overflow: 'hidden',
                 background: '#000',
-                maxHeight: '60vh',
+                maxHeight: '56vh',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -870,7 +982,7 @@ export function LecturePlayerPage() {
           >
             {calText || '녹음이 시작되면 여기에 인식된 텍스트가 표시됩니다.'}
           </div>
-          {calWpm != null && calMode ? (
+          {calWpm != null ? (
             <div
               style={{
                 marginTop: 12,
@@ -880,23 +992,59 @@ export function LecturePlayerPage() {
                 gap: 10,
               }}
             >
-              <div style={{ color: '#111827', fontSize: 14 }}>
-                추정 WPM: <b>{calWpm}</b> / 오늘 모드:{' '}
-                <b>{calMode === 'tired' ? 'tired' : calMode === 'focus' ? 'focus' : 'normal'}</b>
+              <div>
+                <div style={{ color: '#111827', fontSize: 14 }}>
+                  추정 WPM: <b>{calWpm}</b>{' '}
+                  {calMode ? (
+                    <>
+                      / 오늘 모드: <b>{calMode}</b>
+                    </>
+                  ) : (
+                    <span style={{ color: '#6b7280', fontSize: 12, marginLeft: 6 }}>
+                      (더 말해주세요: 최소 {Math.round(MIN_SPEAK_MS / 1000)}초 · {MIN_WORDS}단어 이상)
+                    </span>
+                  )}
+                </div>
+                <div style={{ marginTop: 6, color: '#6b7280', fontSize: 12 }}>
+                  기준: tired {'<'} {WPM_TIRED_MAX}, normal {WPM_TIRED_MAX}–{WPM_NORMAL_MAX}, focus {'>'} {WPM_NORMAL_MAX} (WPM)
+                </div>
+                {calMode ? (
+                  <div style={{ marginTop: 8, color: '#374151', fontSize: 13 }}>
+                    {calMode === 'tired' && '조금 느슨해도 괜찮아요. 제가 더 천천히 도와줄게요.'}
+                    {calMode === 'normal' && '평소 컨디션이에요. 편안한 속도로 함께 가볼게요.'}
+                    {calMode === 'focus' && '집중력이 아주 좋아 보여요! 오늘은 조금 더 깊게 가볼까요?'}
+                  </div>
+                ) : null}
               </div>
-              <button
-                onClick={startLectureAfterCalibration}
-                style={{
-                  background: '#111827',
-                  color: 'white',
-                  borderRadius: 8,
-                  padding: '8px 12px',
-                  fontSize: 13,
-                  fontWeight: 600,
-                }}
-              >
-                학습 시작
-              </button>
+              {calMode ? (
+                <button
+                  onClick={startLectureAfterCalibration}
+                  style={{
+                    background: '#111827',
+                    color: 'white',
+                    borderRadius: 8,
+                    padding: '8px 12px',
+                    fontSize: 13,
+                    fontWeight: 600,
+                  }}
+                >
+                  학습하러 가볼까요?
+                </button>
+              ) : (
+                <button
+                  onClick={beginCalibration}
+                  style={{
+                    background: 'transparent',
+                    color: '#111827',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 8,
+                    padding: '8px 12px',
+                    fontSize: 12,
+                  }}
+                >
+                  조금 더 말하기
+                </button>
+              )}
             </div>
           ) : (
             <div style={{ marginTop: 12, color: '#6b7280', fontSize: 12 }}>

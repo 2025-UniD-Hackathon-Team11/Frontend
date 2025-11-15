@@ -1,5 +1,7 @@
 import type { AnswerResponse, DailyMode, DifficultyMode } from '../types'
 
+const BACKEND_BASE = 'http://home.rocknroll17.com:8000'
+
 export async function sendQuestion(params: {
   lectureId: string
   videoTimeSec: number
@@ -8,41 +10,99 @@ export async function sendQuestion(params: {
   difficultyMode: DifficultyMode
   dailyMode: DailyMode
 }): Promise<AnswerResponse> {
-  const { question, videoTimeSec, difficultyMode } = params
-  await delay(800 + Math.random() * 800)
+  const url = `${BACKEND_BASE}/api/llm/ask`
+  try {
+    // eslint-disable-next-line no-console
+    console.log('[qa] POST', url, params)
+  } catch {}
+  try {
+    const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
+    const body = {
+      lecture_id: params.lectureId,
+      video_time_sec: params.videoTimeSec,
+      question: params.question,
+      daily_mode: params.dailyMode,
+      difficulty_mode: params.difficultyMode,
+      mode: params.mode,
+    }
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const elapsedMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt
+    const cloned = res.clone()
+    const rawText = await cloned.text().catch(() => '')
+    try {
+      // eslint-disable-next-line no-console
+      console.log('[qa] POST status', res.status, 'in', Math.round(elapsedMs), 'ms')
+      // eslint-disable-next-line no-console
+      console.log('[qa] request body', body)
+      // eslint-disable-next-line no-console
+      console.log('[qa] response snippet', rawText.slice(0, 240))
+    } catch {}
+    const data: any = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${JSON.stringify(data)}`)
+    // Normalize possible shapes
+    const answerText: string =
+      data.answerText || data.answer_text || data.answer || '답변을 생성했어요.'
+    const ttsUrl: string | undefined = data.ttsUrl || data.tts_url || data.audioUrl || data.audio_url
+    const relatedFrames =
+      data.relatedFrames ||
+      data.related_frames ||
+      (data.highlight?.startSec
+        ? [{ startSec: data.highlight.startSec, endSec: data.highlight.endSec ?? data.highlight.startSec + 3 }]
+        : [])
+    const resumePlan =
+      data.resumePlan ||
+      data.resume_plan || (data.bridge ? { freezeSec: data.bridge.freezeSec ?? 3, resumeSec: data.bridge.resumeSec ?? 3 } : undefined)
+    const normalized: AnswerResponse = {
+      answerText,
+      ttsUrl: ttsUrl || createBeepFallback(),
+      relatedFrames: Array.isArray(relatedFrames) ? relatedFrames : [],
+      resumePlan,
+    }
+    try { console.log('[qa] normalized response', normalized) } catch {}
+    return normalized
+  } catch (e) {
+    try { console.warn('[qa] fallback due to error:', e) } catch {}
+    // Fallback to local mock if backend unavailable
+    const { question, videoTimeSec, difficultyMode } = params
+    await delay(600)
 
-  const answerText =
-    difficultyMode === 'basic'
-      ? `좋은 질문이에요. 간단히 설명해보면, TCP는 데이터를 순서대로, 빠지지 않게 전달하기 위해 확인 응답과 재전송 같은 메커니즘을 사용해요. 질문 "${truncate(
-          question,
-          48
-        )}" 에 대해 기본 개념부터 차근차근 정리했어요. `
-      : difficultyMode === 'advanced'
-      ? `흥미로운 포인트예요. 혼잡 제어는 AIMD를 기반으로 해서 네트워크의 포화 상태를 피하면서도 최대 처리량을 추구하죠. 질문 "${truncate(
-          question,
-          48
-        )}" 에 대해 핵심과 함정을 빠르게 짚어볼게요. `
-      : `좋은 질문입니다. TCP는 신뢰성과 흐름 제어, 혼잡 제어를 통해 안정적인 전송을 보장합니다. 질문 "${truncate(
-          question,
-          48
-        )}" 에 대해 중요한 부분 위주로 설명할게요. `
+    const answerText =
+      difficultyMode === 'basic'
+        ? `좋은 질문이에요. 간단히 설명해보면, TCP는 데이터를 순서대로, 빠지지 않게 전달하기 위해 확인 응답과 재전송 같은 메커니즘을 사용해요. 질문 "${truncate(
+            question,
+            48
+          )}" 에 대해 기본 개념부터 차근차근 정리했어요. `
+        : difficultyMode === 'advanced'
+        ? `흥미로운 포인트예요. 혼잡 제어는 AIMD를 기반으로 해서 네트워크의 포화 상태를 피하면서도 최대 처리량을 추구하죠. 질문 "${truncate(
+            question,
+            48
+          )}" 에 대해 핵심과 함정을 빠르게 짚어볼게요. `
+        : `좋은 질문입니다. TCP는 신뢰성과 흐름 제어, 혼잡 제어를 통해 안정적인 전송을 보장합니다. 질문 "${truncate(
+            question,
+            48
+          )}" 에 대해 중요한 부분 위주로 설명할게요. `
 
-  const beepUrl = createBeepUrl(3)
+    const beepUrl = createBeepUrl(3)
 
-  const relatedFrames = [
-    { startSec: Math.max(0, Math.floor(videoTimeSec - 5)), endSec: Math.floor(videoTimeSec) },
-  ]
+    const relatedFrames = [
+      { startSec: Math.max(0, Math.floor(videoTimeSec - 5)), endSec: Math.floor(videoTimeSec) },
+    ]
 
-  const resumePlan = {
-    freezeSec: 3,
-    resumeSec: 3,
-  }
+    const resumePlan = {
+      freezeSec: 3,
+      resumeSec: 3,
+    }
 
-  return {
-    answerText: `${answerText} 방금 이야기하던 부분과 연결해서 이어가볼게요.`,
-    ttsUrl: beepUrl,
-    relatedFrames,
-    resumePlan,
+    return {
+      answerText: `${answerText} 방금 이야기하던 부분과 연결해서 이어가볼게요.`,
+      ttsUrl: beepUrl,
+      relatedFrames,
+      resumePlan,
+    }
   }
 }
 
@@ -57,6 +117,10 @@ function truncate(s: string, n: number) {
 function createBeepUrl(seconds: number): string {
   const blob = generateToneWav(seconds, 660, 0.06)
   return URL.createObjectURL(blob)
+}
+
+function createBeepFallback(): string {
+  return createBeepUrl(2)
 }
 
 // Simple 16-bit PCM WAV generator (sine)

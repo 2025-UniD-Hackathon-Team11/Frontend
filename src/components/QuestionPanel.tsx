@@ -14,19 +14,20 @@ export function QuestionPanel(props: {
   const [draft, setDraft] = useState('')
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div
         style={{
-          background: '#fafafa',
-          border: '1px solid #f0f0f0',
-          borderRadius: 8,
-          padding: 10,
-          height: 240,
+          background: 'rgba(255,255,255,0.9)',
+          border: '1px solid #e5e7eb',
+          borderRadius: 12,
+          padding: 12,
+          height: 220,
           overflowY: 'auto',
+          boxShadow: '0 4px 14px rgba(17,24,39,0.06)',
         }}
       >
         {messages.length === 0 && (
-          <div style={{ color: '#999' }}>질문과 답변이 여기에 표시됩니다.</div>
+          <div style={{ color: '#9ca3af', fontSize: 13 }}>질문과 답변이 여기에 표시됩니다.</div>
         )}
         {messages.map((m, i) => (
           <div
@@ -39,12 +40,13 @@ export function QuestionPanel(props: {
           >
             <div
               style={{
-                background: m.role === 'user' ? '#e6f7ff' : '#fff',
-                border: '1px solid #e5e5e5',
-                borderRadius: 8,
-                padding: '6px 8px',
+                background: m.role === 'user' ? '#eef2ff' : '#ffffff',
+                border: '1px solid #e5e7eb',
+                borderRadius: 10,
+                padding: '8px 10px',
                 maxWidth: '70%',
                 whiteSpace: 'pre-wrap',
+                fontSize: 13,
               }}
             >
               {m.content}
@@ -52,45 +54,89 @@ export function QuestionPanel(props: {
           </div>
         ))}
         {isListening && (
-          <div style={{ marginTop: 8, fontSize: 12, color: '#ad8b00' }}>
+          <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>
             🎤 듣는 중… {interimText || ''}
           </div>
         )}
       </div>
 
-      <div style={{ display: 'flex', gap: 8 }}>
-        {!isListening ? (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          background: 'rgba(255,255,255,0.9)',
+          border: '1px solid #e5e7eb',
+          borderRadius: 12,
+          padding: 8,
+        }}
+      >
+        <div style={{ display: 'flex', gap: 6 }}>
+          {!isListening ? (
+            <button
+              onClick={() => onMicStart()}
+              title="마이크 질문"
+              style={{
+                background: '#111827',
+                color: '#fff',
+                border: '1px solid #111827',
+                borderRadius: 10,
+                padding: '8px 10px',
+                fontSize: 12,
+              }}
+            >
+              🎤 말하기
+            </button>
+          ) : (
+            <button
+              onClick={() => onMicStop()}
+              title="음성 인식 종료"
+              style={{
+                background: '#ef4444',
+                color: '#fff',
+                border: '1px solid #ef4444',
+                borderRadius: 10,
+                padding: '8px 10px',
+                fontSize: 12,
+              }}
+            >
+              ⏹ 종료
+            </button>
+          )}
           <button
-            onClick={() => onMicStart()}
-            style={{ background: '#ffd666', border: '1px solid #ffe58f' }}
-            title="마이크 질문"
+            onClick={() => {
+              setIsTextMode((v) => {
+                const next = !v
+                if (next) onTextModeStart?.()
+                return next
+              })
+            }}
+            title="텍스트 질문"
+            style={{
+              background: 'transparent',
+              color: '#111827',
+              border: '1px solid #e5e7eb',
+              borderRadius: 10,
+              padding: '8px 10px',
+              fontSize: 12,
+            }}
           >
-            🎤
+            💬 텍스트
           </button>
-        ) : (
-          <button onClick={() => onMicStop()} title="음성 인식 종료">
-            ⏹
-          </button>
-        )}
-        <button
-          onClick={() => {
-            setIsTextMode((v) => {
-              const next = !v
-              if (next) onTextModeStart?.()
-              return next
-            })
-          }}
-          title="텍스트 질문"
-        >
-          💬
-        </button>
+        </div>
         {isTextMode && (
           <>
             <input
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               placeholder="텍스트로 질문을 입력하세요"
-              style={{ flex: 1 }}
+              style={{
+                flex: 1,
+                border: '1px solid #e5e7eb',
+                borderRadius: 10,
+                padding: '8px 10px',
+                fontSize: 13,
+              }}
             />
             <button
               onClick={() => {
@@ -99,6 +145,14 @@ export function QuestionPanel(props: {
                 onSendText(t)
                 setDraft('')
                 setIsTextMode(false)
+              }}
+              style={{
+                background: '#111827',
+                color: '#fff',
+                border: '1px solid #111827',
+                borderRadius: 10,
+                padding: '8px 12px',
+                fontSize: 12,
               }}
             >
               전송
