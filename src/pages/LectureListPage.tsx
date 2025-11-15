@@ -21,6 +21,10 @@ const Input = styled.input`
 const Button = styled.div`
   border: none;
   display: inline-block;
+  &.active {
+    color: #1b1b88;
+    font-weight: bold;
+  }
 `;
 
 export function LectureListPage() {
@@ -114,6 +118,9 @@ export function LectureListPage() {
 
   const onClick = (e:any) => {
     const val = e.target?.id;
+    const btns = document.querySelectorAll('.category');
+    btns.forEach(btn => btn.classList.remove('active'));
+    e.currentTarget.classList.add('active');
     console.log(val);
     if(val != '전체') {
       const c = items.filter((item) => {
@@ -133,7 +140,7 @@ export function LectureListPage() {
       <div style={{position: 'fixed', marginTop: '25px', transform: 'translateX(-50%)', top: '35px'}}>
         <div style={{position: 'absolute', top: '10px', left: '50%', transform: 'translateX(-50%)', width: '100%', margin: '5px'}}>
           {categories.map((c) => 
-            (<Button onClick={onClick} id={c} style={{marginRight: '10px', cursor: 'pointer'}}>{c}</Button>)
+            (<Button onClick={onClick} id={c} className='category' style={{marginRight: '10px', cursor: 'pointer'}}>{c}</Button>)
           )}
         </div>
         {loading && <div>로딩 중…</div>}
