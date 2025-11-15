@@ -1,4 +1,5 @@
-import { PropsWithChildren, useMemo, useRef, useState } from 'react'
+import type { PropsWithChildren } from 'react'
+import { useRef, useState } from 'react'
 
 export function Tilt(props: PropsWithChildren<{ max?: number; scale?: number; className?: string }>) {
   const { children, max = 8, scale = 1.02, className } = props

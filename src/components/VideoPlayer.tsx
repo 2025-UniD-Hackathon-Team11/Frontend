@@ -13,12 +13,13 @@ type VideoPlayerProps = {
   isPausedExternally: boolean
   onTimeUpdate?: (currentTime: number) => void
   onReady?: (durationSec: number) => void
+  posterUrl?: string
   calWpm?: number
 }
 
 export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
   (props, ref) => {
-    const { src, initialTimeSec, isPausedExternally, onTimeUpdate, onReady } = props
+    const { src, initialTimeSec, isPausedExternally, onTimeUpdate, onReady, posterUrl } = props
     const videoRef = useRef<HTMLVideoElement | null>(null)
     const readyRef = useRef(false)
 
@@ -49,7 +50,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       return () => {
         v.removeEventListener('loadedmetadata', onLoaded)
       }
-    }, [initialTimeSec, onReady])
+    }, [initialTimeSec, onReady, props.calWpm])
 
     useEffect(() => {
       const v = videoRef.current
@@ -99,6 +100,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
           ref={videoRef}
           src={src}
           controls
+          poster={posterUrl}
           style={{ width: '100%', display: 'block' }}
         />
       </div>

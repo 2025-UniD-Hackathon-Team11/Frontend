@@ -1,4 +1,4 @@
-export default function Navigation(props: { activeSection?: string }) {
+export default function Navigation() {
   return (
     <header className="sticky top-0 z-30 backdrop-blur bg-white/60 border-b border-ink-300/50 w-full">
       <div className="w-full h-14 px-6 flex items-center justify-between">

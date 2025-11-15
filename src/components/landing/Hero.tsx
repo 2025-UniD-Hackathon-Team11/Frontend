@@ -2,22 +2,6 @@ import { BackgroundOrbs } from './effects/BackgroundOrbs'
 import { GlassObjects } from './effects/GlassObjects'
 import { useInView } from '../../hooks/useInView'
 
-function ShineButton(props: { href: string; children: React.ReactNode; variant?: 'filled' | 'outline' }) {
-  const { href, children, variant = 'filled' } = props
-  return (
-    <a
-      href={href}
-      className={`group relative inline-flex items-center overflow-hidden rounded-md px-5 py-3 text-sm ${variant === 'filled' ? 'bg-black text-white' : 'border border-ink-300 text-ink-900'}`}
-    >
-      <span className="relative z-10">{children}</span>
-      <span
-        className="pointer-events-none absolute inset-0 translate-x-[-120%] bg-gradient-to-r from-white/0 via-white/30 to-white/0 opacity-60 transition-transform duration-700 group-hover:translate-x-[120%]"
-        aria-hidden
-      />
-    </a>
-  )
-}
-
 export function Hero() {
   const { ref, inView } = useInView<HTMLDivElement>()
   return (

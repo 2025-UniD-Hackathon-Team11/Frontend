@@ -22,6 +22,9 @@ export async function sendQuestion(params: {
       video_time_sec: params.videoTimeSec,
       question: params.question,
       daily_mode: params.dailyMode,
+      // Include numeric condition mapping alongside existing daily_mode string
+      condition: params.dailyMode === 'tired' ? 1 : params.dailyMode === 'normal' ? 2 : 3,
+      condition_text: params.dailyMode,
       difficulty_mode: params.difficultyMode,
       mode: params.mode,
     }

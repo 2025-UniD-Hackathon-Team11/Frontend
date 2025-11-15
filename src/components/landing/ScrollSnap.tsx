@@ -1,4 +1,5 @@
-import { PropsWithChildren, useEffect, useRef } from 'react'
+import type { PropsWithChildren } from 'react'
+import { useEffect, useRef } from 'react'
 
 type Props = {
   sections: string[]
@@ -9,10 +10,9 @@ type Props = {
 }
 
 export default function ScrollSnap(props: PropsWithChildren<Props>) {
-  const { sections, onSectionChange, onScrollProgress, snapThreshold = 0.1, scrollDelay = 200, children } = props
+  const { sections, onSectionChange, onScrollProgress, children } = props
   const containerRef = useRef<HTMLDivElement | null>(null)
   const lockRef = useRef(false)
-  const timeoutRef = useRef<number | null>(null)
 
   useEffect(() => {
     const el = containerRef.current
@@ -44,20 +44,6 @@ export default function ScrollSnap(props: PropsWithChildren<Props>) {
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
   }, [sections, onSectionChange, onScrollProgress])
-
-  const scrollToSection = (idx: number) => {
-    const el = containerRef.current
-    if (!el) return
-    const id = sections[idx]
-    const target = document.getElementById(id)
-    if (!target) return
-    lockRef.current = true
-    target.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    if (timeoutRef.current) window.clearTimeout(timeoutRef.current)
-    timeoutRef.current = window.setTimeout(() => {
-      lockRef.current = false
-    }, scrollDelay)
-  }
 
   return (
     <div ref={containerRef} className="h-[100dvh] overflow-y-auto snap-y snap-mandatory">
