@@ -126,43 +126,45 @@ export function LectureListPage() {
 
   return (
     <div style={{ padding: 16, maxWidth: 1000, margin: '0 auto'}}>
-      <div style={{marginBottom: '15px', position: 'fixed', left: '50%', transform: 'translateX(-50%)', top: '0', backgroundColor: 'black', width: '100%', padding: '20px', display: 'flex', flexDirection: 'row'}}>
+      <div style={{marginBottom: '15px', position: 'fixed', left: '50%', transform: 'translateX(-50%)', top: '0', backgroundColor: 'black', width: '100%', padding: '20px', display: 'flex', flexDirection: 'row', zIndex: '3'}}>
         <h2 style={{ marginTop: 0, fontSize: '20px', fontWeight: 'bolder', color: 'white' }}>DailyFit Lecture</h2>
         <Input value={value} onChange={onChange} placeholder='검색'/>
       </div>
-      <div style={{marginTop: '4%'}}>
-        {categories.map((c) => 
-          (<Button onClick={onClick} id={c} style={{marginRight: '10px', cursor: 'pointer'}}>{c}</Button>)
-        )}
-      </div>
-      {loading && <div>로딩 중…</div>}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, minmax(260px, 1fr))',
-          gap: 12,
-          marginTop: '25px',
-        }}
-      >
-        { value? filtered.map((f) => (
-          <ItemContent 
-            id={f.id}
-            thumbnailUrl={f.thumbnailUrl}
-            title={f.title}
-            description={f.description}
-            durationSec={f.durationSec}
-            progress={f.progress}
-          />
-        )) : categoriedItems.map((L) => (
+      <div style={{position: 'fixed', marginTop: '25px', transform: 'translateX(-50%)', top: '35px'}}>
+        <div style={{position: 'absolute', top: '10px', left: '50%', transform: 'translateX(-50%)', width: '100%', margin: '5px'}}>
+          {categories.map((c) => 
+            (<Button onClick={onClick} id={c} style={{marginRight: '10px', cursor: 'pointer'}}>{c}</Button>)
+          )}
+        </div>
+        {loading && <div>로딩 중…</div>}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, minmax(260px, 1fr))',
+            gap: 12,
+            marginTop: '50px'
+          }}
+        >
+          { value? filtered.map((f) => (
             <ItemContent 
-              id={L.id}
-              thumbnailUrl={L.thumbnailUrl}
-              title={L.title}
-              description={L.description}
-              durationSec={L.durationSec}
-              progress={L.progress}
+              id={f.id}
+              thumbnailUrl={f.thumbnailUrl}
+              title={f.title}
+              description={f.description}
+              durationSec={f.durationSec}
+              progress={f.progress}
             />
-        ))}
+          )) : categoriedItems.map((L) => (
+              <ItemContent 
+                id={L.id}
+                thumbnailUrl={L.thumbnailUrl}
+                title={L.title}
+                description={L.description}
+                durationSec={L.durationSec}
+                progress={L.progress}
+              />
+          ))}
+        </div>
       </div>
     </div>
   )
