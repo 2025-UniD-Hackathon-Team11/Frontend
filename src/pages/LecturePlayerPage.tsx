@@ -62,8 +62,11 @@ export function LecturePlayerPage() {
   const lastOnEndTsRef = useRef<number>(0)
   const audioCacheRef = useRef<Map<string, HTMLAudioElement>>(new Map())
   const cachedOrderRef = useRef<string[]>([])
+  // Focus question (집중도 질문) state
+  const [showFocusQuestion, setShowFocusQuestion] = useState<boolean>(true)
+  const [focusQuestionAnswer, setFocusQuestionAnswer] = useState<number | null>(null) // 1: 매우 피곤, 2: 보통, 3: 매우 집중
   // Calibration (오늘의 학습 상태) state
-  const [showCalibration, setShowCalibration] = useState<boolean>(true)
+  const [showCalibration, setShowCalibration] = useState<boolean>(false)
   const [calStartAtMs, setCalStartAtMs] = useState<number | null>(null)
   const [calWpm, setCalWpm] = useState<number>(0)
   const [calMode, setCalMode] = useState<DailyMode | null>(null)
@@ -131,10 +134,12 @@ export function LecturePlayerPage() {
     return `${m}:${String(r).padStart(2, '0')}`
   }
   const getPlaybackRate = (): number => {
-    const m = playerState.difficultyMode
-    if (m === 'basic') return 0.75
-    if (m === 'advanced') return 1.25
-    return 1
+    // difficultyMode를 우선적으로 사용 (사용자가 난이도를 선택하면 그에 따라 배속 변경)
+    // dailyMode는 유지되지만 배속은 difficultyMode에 따라 결정됨
+    const dm = playerState.difficultyMode
+    if (dm === 'basic') return 0.75
+    if (dm === 'advanced') return 1.25
+    return 1.0 // normal
   }
   const addCacheBuster = (u: string): string => {
     try {
@@ -434,13 +439,13 @@ export function LecturePlayerPage() {
     }
   }, [currentAnswerAudioUrl, audioRef])
 
-  // Pause playhead while calibration is shown
+  // Pause playhead while focus question or calibration is shown
   useEffect(() => {
-    if (showCalibration) {
+    if (showFocusQuestion || showCalibration) {
       updatePlayheadPaused(true)
       try { frameAudioRef.current?.pause() } catch {}
     }
-  }, [showCalibration])
+  }, [showFocusQuestion, showCalibration])
 
   // When difficulty changes, update playbackRate of any active media
   useEffect(() => {
@@ -508,15 +513,70 @@ export function LecturePlayerPage() {
   const finishCalibration = () => {
     calStop()
   }
+  // 질문 답변 후 WPS 측정 모달로 이동
+  const proceedToWPSMeasurement = () => {
+    if (focusQuestionAnswer == null) return
+    setShowFocusQuestion(false)
+    setShowCalibration(true)
+  }
+
   const startLectureAfterCalibration = () => {
-    // Decide final mode: if not detected, default to 'tired'
-    const finalMode: DailyMode = (calMode as DailyMode | null) ?? 'tired'
+    // 질문 답변과 WPS를 함께 고려하여 최종 집중도 결정
+    let finalMode: DailyMode = 'normal' // 기본값
+    
+    // 질문 답변 점수 (1: 매우 피곤, 2: 보통, 3: 매우 집중)
+    const questionScore = focusQuestionAnswer ?? 2
+    
+    // WPS 기반 모드 (calMode가 있으면 사용, 없으면 WPM으로 계산)
+    let wpsMode: DailyMode | null = calMode
+    if (!wpsMode && calWpm > 0) {
+      if (calWpm < WPM_TIRED_MAX) wpsMode = 'tired'
+      else if (calWpm <= WPM_NORMAL_MAX) wpsMode = 'normal'
+      else wpsMode = 'focus'
+    }
+    
+    // 질문 답변과 WPS를 종합하여 최종 모드 결정
+    // 두 값을 평균하여 결정 (1=tired, 2=normal, 3=focus)
+    const wpsScore = wpsMode === 'tired' ? 1 : wpsMode === 'focus' ? 3 : 2
+    const combinedScore = (questionScore + wpsScore) / 2
+    
+    if (combinedScore < 1.5) {
+      finalMode = 'tired'
+    } else if (combinedScore > 2.5) {
+      finalMode = 'focus'
+    } else {
+      finalMode = 'normal'
+    }
+    
+    // WPS가 없고 질문만 있는 경우 질문 답변을 우선 사용
+    if (!wpsMode && focusQuestionAnswer != null) {
+      if (focusQuestionAnswer === 1) finalMode = 'tired'
+      else if (focusQuestionAnswer === 3) finalMode = 'focus'
+      else finalMode = 'normal'
+    }
+    
     try {
       const code = finalMode === 'tired' ? 1 : finalMode === 'normal' ? 2 : 3
       // eslint-disable-next-line no-console
-      console.log('[page] reportDailyMode payload:', { mode_text: finalMode, mode: code })
+      console.log('[page] final mode decision:', {
+        questionAnswer: focusQuestionAnswer,
+        wpsMode,
+        calWpm,
+        combinedScore,
+        finalMode,
+        mode_code: code
+      })
     } catch {}
-    setPlayerState((s) => ({ ...s, dailyMode: finalMode }))
+    
+    // 집중도에 따라 난이도도 자동으로 설정
+    let difficultyMode: DifficultyMode = 'normal'
+    if (finalMode === 'tired') {
+      difficultyMode = 'basic'
+    } else if (finalMode === 'focus') {
+      difficultyMode = 'advanced'
+    }
+    
+    setPlayerState((s) => ({ ...s, dailyMode: finalMode, difficultyMode }))
     setShowCalibration(false)
     // unlock audio after user interaction
     setAudioUnlocked(true)
@@ -905,17 +965,17 @@ export function LecturePlayerPage() {
     if (!wantResume) return
     if (resumeAppliedRef.current) return
     if (savedProgressSec == null) return
-    if (showCalibration) return
+    if (showFocusQuestion || showCalibration) return
     seekToUserTime(savedProgressSec)
     resumeAppliedRef.current = true
     try { console.log('[resume] applied after calibration ->', savedProgressSec.toFixed(2)) } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showCalibration, savedProgressSec])
+  }, [showFocusQuestion, showCalibration, savedProgressSec])
 
   // After calibration ends (and not resuming), start first sentence 2s later from 0s
   useEffect(() => {
     const wantResume = !!searchParams.get('resume')
-    if (showCalibration) return
+    if (showFocusQuestion || showCalibration) return
     if (wantResume) return
     // start only once when calibration is dismissed
     let started = false
@@ -1246,6 +1306,18 @@ export function LecturePlayerPage() {
             {m === 'basic' ? '처음 배우는 내용' : m === 'advanced' ? '빠르게/깊게' : '보통'}
           </button>
         ))}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>
+            집중도: <span style={{ fontWeight: 600, color: '#111827' }}>
+              {playerState.dailyMode === 'tired' ? '피곤함' : playerState.dailyMode === 'focus' ? '집중' : '보통'}
+            </span>
+          </div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>
+            배속: <span style={{ fontWeight: 600, color: '#111827' }}>
+              {getPlaybackRate().toFixed(2)}x
+            </span>
+          </div>
+        </div>
       </div>
 
       <div
@@ -1307,6 +1379,7 @@ export function LecturePlayerPage() {
               initialTimeSec={(searchParams.get('resume') && savedProgressSec != null) ? savedProgressSec : (detail.lastWatchedSec ?? 0)}
               isPausedExternally={playerState.avatarState !== 'idle' || isPlayheadPaused}
               posterUrl={framePosterUrl}
+              playbackRate={getPlaybackRate()}
               onTimeUpdate={(t) =>
                 setPlayerState((s) => ({ ...s, videoCurrentTime: t }))
               }
@@ -1484,6 +1557,125 @@ export function LecturePlayerPage() {
           )}
         </div>
       </div>
+    {showFocusQuestion ? (
+      <div
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 50,
+          background: 'rgba(0,0,0,0.45)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 16,
+        }}
+      >
+        <div
+          style={{
+            width: '100%',
+            maxWidth: 520,
+            borderRadius: 16,
+            background: 'white',
+            padding: 20,
+            boxShadow: '0 10px 30px rgba(0,0,0,0.15)',
+          }}
+        >
+          <div style={{ fontSize: 18, fontWeight: 700, color: '#111827' }}>
+            집중도 체크
+          </div>
+          <div style={{ marginTop: 8, color: '#6b7280', fontSize: 14 }}>
+            지금 집중도가 어느 정도인가요?
+          </div>
+          <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <button
+              onClick={() => setFocusQuestionAnswer(1)}
+              style={{
+                background: focusQuestionAnswer === 1 ? '#fee2e2' : 'transparent',
+                border: `2px solid ${focusQuestionAnswer === 1 ? '#ef4444' : '#e5e7eb'}`,
+                borderRadius: 12,
+                padding: '14px 16px',
+                fontSize: 14,
+                color: '#111827',
+                textAlign: 'left',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+              }}
+            >
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>😴 매우 피곤해요</div>
+              <div style={{ fontSize: 12, color: '#6b7280' }}>집중하기 어려운 상태</div>
+            </button>
+            <button
+              onClick={() => setFocusQuestionAnswer(2)}
+              style={{
+                background: focusQuestionAnswer === 2 ? '#e0e7ff' : 'transparent',
+                border: `2px solid ${focusQuestionAnswer === 2 ? '#6366f1' : '#e5e7eb'}`,
+                borderRadius: 12,
+                padding: '14px 16px',
+                fontSize: 14,
+                color: '#111827',
+                textAlign: 'left',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+              }}
+            >
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>😊 보통이에요</div>
+              <div style={{ fontSize: 12, color: '#6b7280' }}>평소와 비슷한 컨디션</div>
+            </button>
+            <button
+              onClick={() => setFocusQuestionAnswer(3)}
+              style={{
+                background: focusQuestionAnswer === 3 ? '#dcfce7' : 'transparent',
+                border: `2px solid ${focusQuestionAnswer === 3 ? '#22c55e' : '#e5e7eb'}`,
+                borderRadius: 12,
+                padding: '14px 16px',
+                fontSize: 14,
+                color: '#111827',
+                textAlign: 'left',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+              }}
+            >
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>🚀 매우 집중돼요</div>
+              <div style={{ fontSize: 12, color: '#6b7280' }}>집중력이 좋은 상태</div>
+            </button>
+          </div>
+          <div style={{ marginTop: 20, display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <button
+              onClick={() => {
+                setFocusQuestionAnswer(2) // 기본값으로 설정하고 진행
+                proceedToWPSMeasurement()
+              }}
+              style={{
+                background: 'transparent',
+                color: '#111827',
+                border: '1px solid #e5e7eb',
+                borderRadius: 8,
+                padding: '8px 12px',
+                fontSize: 12,
+              }}
+            >
+              건너뛰기
+            </button>
+            <button
+              onClick={proceedToWPSMeasurement}
+              disabled={focusQuestionAnswer == null}
+              style={{
+                background: focusQuestionAnswer != null ? '#111827' : '#9ca3af',
+                color: 'white',
+                border: 'none',
+                borderRadius: 8,
+                padding: '8px 16px',
+                fontSize: 14,
+                fontWeight: 600,
+                cursor: focusQuestionAnswer != null ? 'pointer' : 'not-allowed',
+              }}
+            >
+              다음
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null}
     {showCalibration ? (
       <div
         style={{
