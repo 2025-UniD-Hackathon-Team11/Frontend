@@ -93,6 +93,7 @@ export function LecturePlayerPage() {
   const isPausedRef = useRef<boolean>(false)
   const [timelineDurationSec, setTimelineDurationSec] = useState<number>(0)
   const [savedProgressSec, setSavedProgressSec] = useState<number | null>(null)
+  const [displayElapsedSec, setDisplayElapsedSec] = useState<number>(0)
   const getUserElapsedSec = () => {
     return (
       playheadOffsetSecRef.current +
@@ -266,6 +267,8 @@ export function LecturePlayerPage() {
     audioPlaySeqRef.current += 1
     playheadOffsetSecRef.current = clamped
     playheadStartMsRef.current = performance.now()
+    // Update display immediately for responsive UI
+    setDisplayElapsedSec(clamped)
     // Immediate frame update for responsiveness
     if (frames.length) {
       let idx = -1
@@ -312,6 +315,21 @@ export function LecturePlayerPage() {
     }, 500)
     return () => window.clearInterval(id)
   }, [])
+
+  // Update progress bar display every second
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setDisplayElapsedSec(getUserElapsedSec())
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  // Initialize displayElapsedSec when savedProgressSec is loaded
+  useEffect(() => {
+    if (savedProgressSec != null) {
+      setDisplayElapsedSec(savedProgressSec)
+    }
+  }, [savedProgressSec])
 
   const { isListening, text, start, stop } = useSpeechRecognition({
     lang: 'ko-KR',
@@ -782,13 +800,21 @@ export function LecturePlayerPage() {
     }
   }, [currentFrameIndex, frames])
 
-  // Pause any frame audio when playhead is paused; do not auto-play on resume here
+  // Pause any frame audio when playhead is paused; auto-play on resume if conditions are met
   useEffect(() => {
     if (isPlayheadPaused) {
       try { frameAudioRef.current?.pause() } catch {}
       isFrameAudioPlayingRef.current = false
+    } else {
+      // When playhead resumes, play audio for current frame if unlocked and frame is valid
+      if (audioUnlocked && currentFrameIndex >= 0 && currentFrameIndex < frames.length) {
+        const f = frames[currentFrameIndex]
+        if (f?.audioUrl && !isFrameAudioPlayingRef.current) {
+          startFrameAudioForIndex(currentFrameIndex)
+        }
+      }
     }
-  }, [isPlayheadPaused])
+  }, [isPlayheadPaused, audioUnlocked, currentFrameIndex, frames])
 
   useEffect(() => {
     return () => {
@@ -897,9 +923,13 @@ export function LecturePlayerPage() {
       if (started) return
       started = true
       // reset to beginning and start
-      seekToUserTime(0)
+      // Update playhead paused state first, then seek to ensure audio plays
       updatePlayheadPaused(false)
-      try { console.log('[start] first sentence after calibration (2s delay)') } catch {}
+      // Use setTimeout to ensure state update is applied before seek
+      setTimeout(() => {
+        seekToUserTime(0)
+        try { console.log('[start] first sentence after calibration (2s delay)') } catch {}
+      }, 0)
     }, 2000)
     return () => {
       window.clearTimeout(id)
@@ -1311,7 +1341,7 @@ export function LecturePlayerPage() {
           <div style={{ marginTop: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <div style={{ fontSize: 12, color: '#6b7280', minWidth: 44, textAlign: 'right' }}>
-                {formatTime(getUserElapsedSec())}
+                {formatTime(displayElapsedSec)}
               </div>
               <div
                 onClick={(e) => {
@@ -1338,7 +1368,7 @@ export function LecturePlayerPage() {
                     inset: 0,
                     width: `${(() => {
                       const dur = timelineDurationSec || (frames.length ? frames[frames.length - 1]?.timeSec ?? 0 : 0)
-                      const elapsed = getUserElapsedSec()
+                      const elapsed = displayElapsedSec
                       return dur > 0 ? Math.max(0, Math.min(100, (elapsed / dur) * 100)) : 0
                     })()}%`,
                     background: '#91d5ff',
