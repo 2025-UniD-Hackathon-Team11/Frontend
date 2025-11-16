@@ -64,7 +64,14 @@ export function LecturePlayerPage() {
   const cachedOrderRef = useRef<string[]>([])
   // Focus question (집중도 질문) state
   const [showFocusQuestion, setShowFocusQuestion] = useState<boolean>(true)
-  const [focusQuestionAnswer, setFocusQuestionAnswer] = useState<number | null>(null) // 1: 매우 피곤, 2: 보통, 3: 매우 집중
+  const [focusQuestionAnswer, setFocusQuestionAnswer] = useState<number | null>(null) // 1: 피곤, 2: 보통, 3: 집중
+  // 반응 속도 게임 state
+  const [gameState, setGameState] = useState<'idle' | 'waiting' | 'ready' | 'finished'>('idle')
+  const [gameRound, setGameRound] = useState<number>(0)
+  const [reactionTimes, setReactionTimes] = useState<number[]>([])
+  const [readyTime, setReadyTime] = useState<number | null>(null)
+  const gameTimeoutRef = useRef<number | null>(null)
+  const TOTAL_ROUNDS = 5
   // Calibration (오늘의 학습 상태) state
   const [showCalibration, setShowCalibration] = useState<boolean>(false)
   const [calStartAtMs, setCalStartAtMs] = useState<number | null>(null)
@@ -401,41 +408,192 @@ export function LecturePlayerPage() {
         dailyMode: playerState.dailyMode,
       })
       setCurrentAnswerResponse(res)
+      currentAnswerResponseRef.current = res
+      // 질문 시점의 시간 저장
+      const stoppedTime = questionTimeSec ?? playerState.videoCurrentTime
+      stoppedTimeRef.current = stoppedTime
       setChatMessages((msgs) => [...msgs, { role: 'assistant', content: res.answerText }])
       setPlayerState((s) => ({ ...s, avatarState: 'talking' }))
+      // 답변 음성 재생 전에 프레임 오디오 일시정지
+      pauseAllFrameAudios()
       if (res.relatedFrames?.length) {
         const f = res.relatedFrames[0]
-        // stoppedTime = videoRef.current?.getCurrentTime();
-        // console.log(`스톱 시간: ${stoppedTime}`);
         setShowOverlay(f)
       }
-      setCurrentAnswerAudioUrl(res.ttsUrl)
-      await play()
-      // After answer: keep video paused and ask user if they understood
-      setShowOverlay(null)
-      setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
+      // 비디오 일시정지
       videoRef.current?.pause()
       updatePlayheadPaused(true)
+      // 답변 음성 재생 (useEffect에서 자동으로 로드되고 재생됨)
+      setCurrentAnswerAudioUrl(res.ttsUrl)
+      try {
+        console.log('[answer-audio] setting url:', res.ttsUrl)
+      } catch {}
+      // After answer: keep video paused and ask user if they understood
+      // 음성 재생이 끝나면 onended에서 resumePlan에 따라 자동으로 재개됨
+      setShowOverlay(null)
+      setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
       setAwaitingUnderstanding(true)
       micBusyRef.current = false
     })()
   }
   const { play, stop: stopAudio, audioRef } = useAudioPlayer()
   const [currentAnswerAudioUrl, setCurrentAnswerAudioUrl] = useState<string | undefined>(undefined)
+  const currentAnswerResponseRef = useRef<AnswerResponse | null>(null)
+  const stoppedTimeRef = useRef<number | null>(null)
   useEffect(() => {
     // tie url to player
     if (!currentAnswerAudioUrl) return
-    // recreate audio element inside hook by updating src via ref
-    const a = new Audio(addCacheBuster(currentAnswerAudioUrl))
-    try { a.playbackRate = getPlaybackRate() } catch {}
+    
+    // 이전 오디오 정리
     if (audioRef.current) {
       try {
         audioRef.current.pause()
+        audioRef.current.src = ''
+        audioRef.current.onended = null
+        audioRef.current.onerror = null
+        audioRef.current.oncanplaythrough = null
+        audioRef.current.onloadeddata = null
       } catch {}
     }
+    
+    // URL 처리: blob, data URL은 그대로, 상대 경로는 절대 경로로 변환
+    let audioUrl = currentAnswerAudioUrl
+    if (!audioUrl.startsWith('blob:') && !audioUrl.startsWith('data:') && !audioUrl.startsWith('http')) {
+      // 상대 경로인 경우 절대 경로로 변환
+      try {
+        const baseUrl = 'http://home.rocknroll17.com:8000'
+        audioUrl = audioUrl.startsWith('/') 
+          ? `${baseUrl}${audioUrl}`
+          : `${baseUrl}/${audioUrl}`
+      } catch {
+        // 변환 실패 시 원본 사용
+      }
+    }
+    // cache buster 추가 (blob, data URL 제외)
+    if (!audioUrl.startsWith('blob:') && !audioUrl.startsWith('data:')) {
+      audioUrl = addCacheBuster(audioUrl)
+    }
+    
+    try {
+      console.log('[answer-audio] creating audio with url:', audioUrl)
+    } catch {}
+    
+    const a = new Audio(audioUrl)
+    a.playbackRate = getPlaybackRate()
+    a.volume = 1.0
+    a.muted = false
+    
+    // 에러 핸들링
+    a.onerror = (e) => {
+      try {
+        console.error('[answer-audio] playback error:', e, 'url:', audioUrl, 'error:', a.error)
+      } catch {}
+    }
+    
     audioRef.current = a
+    
+    // 재생 함수
+    const attemptPlay = async () => {
+      if (audioRef.current !== a) return
+      try {
+        await a.play()
+        try {
+          console.log('[answer-audio] playing successfully, duration:', a.duration)
+        } catch {}
+      } catch (e: any) {
+        try {
+          console.error('[answer-audio] play failed:', e?.message || e, 'url:', audioUrl)
+          // 재시도
+          setTimeout(() => {
+            if (audioRef.current === a) {
+              a.play().catch((err) => {
+                try {
+                  console.error('[answer-audio] retry play failed:', err)
+                } catch {}
+              })
+            }
+          }, 500)
+        } catch {}
+      }
+    }
+    
+    // 로드 완료 확인 및 재생 시도
+    a.onloadeddata = () => {
+      try {
+        console.log('[answer-audio] loaded, duration:', a.duration, 'readyState:', a.readyState)
+      } catch {}
+      attemptPlay()
+    }
+    
+    // Audio가 준비되면 재생
+    a.oncanplaythrough = () => {
+      try {
+        console.log('[answer-audio] can play through, duration:', a.duration)
+      } catch {}
+      attemptPlay()
+    }
+    
+    a.oncanplay = () => {
+      try {
+        console.log('[answer-audio] can play, readyState:', a.readyState)
+      } catch {}
+      // canplay에서도 재생 시도
+      if (a.readyState >= 2) {
+        attemptPlay()
+      }
+    }
+    
+    // 이미 로드된 경우 즉시 재생 시도
+    if (a.readyState >= 2) {
+      attemptPlay()
+    } else {
+      // 명시적으로 로드 시작
+      a.load()
+    }
+    
     a.onended = () => {
-      // noop, we chain after play() awaited above
+      try {
+        console.log('[answer-audio] ended, resuming video')
+      } catch {}
+      // 음성 재생이 끝나면 resumePlan에 따라 동영상 재개
+      const response = currentAnswerResponseRef.current
+      if (response?.resumePlan) {
+        const { freezeSec = 0, resumeSec } = response.resumePlan
+        // freezeSec 동안 대기 후 resumeSec 위치로 이동하여 재개
+        setTimeout(() => {
+          const stoppedTime = stoppedTimeRef.current ?? (videoRef.current?.getCurrentTime() ?? 0)
+          const targetTime = typeof resumeSec === 'number' 
+            ? Math.max(0, stoppedTime - freezeSec + resumeSec)
+            : Math.max(0, stoppedTime - freezeSec)
+          seekToUserTime(targetTime)
+          updatePlayheadPaused(false)
+          // 프레임 오디오도 재개
+          if (audioUnlocked && currentFrameIndex >= 0) {
+            startFrameAudioForIndex(currentFrameIndex)
+          }
+          videoRef.current?.play()
+        }, Math.max(0, freezeSec * 1000))
+      } else {
+        // resumePlan이 없으면 기존처럼 사용자 입력을 기다림 (awaitingUnderstanding 상태 유지)
+        try {
+          console.log('[answer-audio] no resumePlan, waiting for user input')
+        } catch {}
+      }
+    }
+    
+    // cleanup
+    return () => {
+      try {
+        if (a && audioRef.current === a) {
+          a.pause()
+          a.src = ''
+          a.onended = null
+          a.onerror = null
+          a.oncanplaythrough = null
+          a.oncanplay = null
+          a.onloadeddata = null
+        }
+      } catch {}
     }
   }, [currentAnswerAudioUrl, audioRef])
 
@@ -513,9 +671,96 @@ export function LecturePlayerPage() {
   const finishCalibration = () => {
     calStop()
   }
+  // 반응 속도 게임 함수들
+  const startReactionGame = () => {
+    setGameState('idle')
+    setGameRound(0)
+    setReactionTimes([])
+    nextGameRound()
+  }
+
+  const nextGameRound = () => {
+    setGameState('waiting')
+    // 1-3초 사이 랜덤 시간 후 ready 상태로 변경
+    const randomDelay = 1000 + Math.random() * 2000
+    gameTimeoutRef.current = window.setTimeout(() => {
+      setGameState('ready')
+      setReadyTime(performance.now())
+    }, randomDelay)
+  }
+
+  const handleGameClick = () => {
+    if (gameState === 'ready' && readyTime != null) {
+      const reactionTime = performance.now() - readyTime
+      setReactionTimes((prev) => {
+        const newTimes = [...prev, reactionTime]
+        const nextRound = newTimes.length
+        setGameState('idle')
+        setReadyTime(null)
+        // 다음 라운드로
+        if (nextRound >= TOTAL_ROUNDS) {
+          setTimeout(() => {
+            finishGame(newTimes)
+          }, 500)
+        } else {
+          setGameRound(nextRound)
+          setTimeout(() => {
+            nextGameRound()
+          }, 500)
+        }
+        return newTimes
+      })
+    } else if (gameState === 'waiting') {
+      // 너무 빨리 클릭한 경우 (페널티)
+      setReactionTimes((prev) => {
+        const newTimes = [...prev, 10000] // 매우 느린 시간으로 기록
+        const nextRound = newTimes.length
+        setGameState('idle')
+        if (gameTimeoutRef.current) {
+          window.clearTimeout(gameTimeoutRef.current)
+          gameTimeoutRef.current = null
+        }
+        if (nextRound >= TOTAL_ROUNDS) {
+          setTimeout(() => {
+            finishGame(newTimes)
+          }, 500)
+        } else {
+          setGameRound(nextRound)
+          setTimeout(() => {
+            nextGameRound()
+          }, 500)
+        }
+        return newTimes
+      })
+    }
+  }
+
+  const finishGame = (times: number[]) => {
+    setGameState('finished')
+    // 평균 반응 시간 계산
+    const validTimes = times.filter((t) => t < 5000) // 5초 이상은 무효
+    if (validTimes.length === 0) {
+      setFocusQuestionAnswer(2) // 기본값
+      return
+    }
+    const avgTime = validTimes.reduce((a, b) => a + b, 0) / validTimes.length
+    // 반응 시간에 따라 집중도 평가 (빠를수록 집중)
+    if (avgTime < 250) {
+      setFocusQuestionAnswer(3) // 매우 빠름 = 집중
+    } else if (avgTime < 400) {
+      setFocusQuestionAnswer(2) // 보통
+    } else {
+      setFocusQuestionAnswer(1) // 느림 = 피곤
+    }
+  }
+
   // 질문 답변 후 WPS 측정 모달로 이동
   const proceedToWPSMeasurement = () => {
-    if (focusQuestionAnswer == null) return
+    if (focusQuestionAnswer == null && gameState !== 'finished') return
+    if (gameTimeoutRef.current) {
+      window.clearTimeout(gameTimeoutRef.current)
+      gameTimeoutRef.current = null
+    }
     setShowFocusQuestion(false)
     setShowCalibration(true)
   }
@@ -1098,15 +1343,25 @@ export function LecturePlayerPage() {
         dailyMode: playerState.dailyMode,
       })
       setCurrentAnswerResponse(res)
+      currentAnswerResponseRef.current = res
+      // 질문 시점의 시간 저장
+      const stoppedTime = videoRef.current?.getCurrentTime() ?? 0
+      stoppedTimeRef.current = stoppedTime
       setChatMessages((msgs) => [...msgs, { role: 'assistant', content: res.answerText }])
       setPlayerState((s) => ({ ...s, avatarState: 'talking' }))
-      // For text mode, keep playing video; just play TTS
-      setCurrentAnswerAudioUrl(res.ttsUrl)
-      await play()
-      // After answer: keep video paused and ask user if they understood
-      setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
+      // 답변 음성 재생 전에 프레임 오디오 일시정지
+      pauseAllFrameAudios()
+      // 비디오 일시정지
       videoRef.current?.pause()
       updatePlayheadPaused(true)
+      // 답변 음성 재생 (useEffect에서 자동으로 로드되고 재생됨)
+      setCurrentAnswerAudioUrl(res.ttsUrl)
+      try {
+        console.log('[answer-audio] setting url:', res.ttsUrl)
+      } catch {}
+      // After answer: keep video paused and ask user if they understood
+      // 음성 재생이 끝나면 onended에서 resumePlan에 따라 자동으로 재개됨
+      setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
       setAwaitingUnderstanding(true)
     })()
   }
@@ -1149,13 +1404,24 @@ export function LecturePlayerPage() {
         dailyMode: playerState.dailyMode,
       })
       setCurrentAnswerResponse(res)
+      currentAnswerResponseRef.current = res
+      // 질문 시점의 시간 저장
+      const stoppedTime = videoRef.current?.getCurrentTime() ?? 0
+      stoppedTimeRef.current = stoppedTime
       setChatMessages((msgs) => [...msgs, { role: 'assistant', content: res.answerText }])
       setPlayerState((s) => ({ ...s, avatarState: 'talking' }))
-      setCurrentAnswerAudioUrl(res.ttsUrl)
-      await play()
-      setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
+      // 답변 음성 재생 전에 프레임 오디오 일시정지
+      pauseAllFrameAudios()
+      // 비디오 일시정지
       videoRef.current?.pause()
       updatePlayheadPaused(true)
+      // 답변 음성 재생 (useEffect에서 자동으로 로드되고 재생됨)
+      setCurrentAnswerAudioUrl(res.ttsUrl)
+      try {
+        console.log('[answer-audio] setting url:', res.ttsUrl)
+      } catch {}
+      // 음성 재생이 끝나면 onended에서 resumePlan에 따라 자동으로 재개됨
+      setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
       setAwaitingUnderstanding(true)
     })()
   }
@@ -1581,98 +1847,129 @@ export function LecturePlayerPage() {
           }}
         >
           <div style={{ fontSize: 18, fontWeight: 700, color: '#111827' }}>
-            집중도 체크
+            집중도 체크 게임
           </div>
-          <div style={{ marginTop: 8, color: '#6b7280', fontSize: 14 }}>
-            지금 집중도가 어느 정도인가요?
-          </div>
-          <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <button
-              onClick={() => setFocusQuestionAnswer(1)}
-              style={{
-                background: focusQuestionAnswer === 1 ? '#fee2e2' : 'transparent',
-                border: `2px solid ${focusQuestionAnswer === 1 ? '#ef4444' : '#e5e7eb'}`,
-                borderRadius: 12,
-                padding: '14px 16px',
-                fontSize: 14,
-                color: '#111827',
-                textAlign: 'left',
-                cursor: 'pointer',
-                transition: 'all 0.2s',
-              }}
-            >
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>😴 매우 피곤해요</div>
-              <div style={{ fontSize: 12, color: '#6b7280' }}>집중하기 어려운 상태</div>
-            </button>
-            <button
-              onClick={() => setFocusQuestionAnswer(2)}
-              style={{
-                background: focusQuestionAnswer === 2 ? '#e0e7ff' : 'transparent',
-                border: `2px solid ${focusQuestionAnswer === 2 ? '#6366f1' : '#e5e7eb'}`,
-                borderRadius: 12,
-                padding: '14px 16px',
-                fontSize: 14,
-                color: '#111827',
-                textAlign: 'left',
-                cursor: 'pointer',
-                transition: 'all 0.2s',
-              }}
-            >
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>😊 보통이에요</div>
-              <div style={{ fontSize: 12, color: '#6b7280' }}>평소와 비슷한 컨디션</div>
-            </button>
-            <button
-              onClick={() => setFocusQuestionAnswer(3)}
-              style={{
-                background: focusQuestionAnswer === 3 ? '#dcfce7' : 'transparent',
-                border: `2px solid ${focusQuestionAnswer === 3 ? '#22c55e' : '#e5e7eb'}`,
-                borderRadius: 12,
-                padding: '14px 16px',
-                fontSize: 14,
-                color: '#111827',
-                textAlign: 'left',
-                cursor: 'pointer',
-                transition: 'all 0.2s',
-              }}
-            >
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>🚀 매우 집중돼요</div>
-              <div style={{ fontSize: 12, color: '#6b7280' }}>집중력이 좋은 상태</div>
-            </button>
-          </div>
-          <div style={{ marginTop: 20, display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-            <button
-              onClick={() => {
-                setFocusQuestionAnswer(2) // 기본값으로 설정하고 진행
-                proceedToWPSMeasurement()
-              }}
-              style={{
-                background: 'transparent',
-                color: '#111827',
-                border: '1px solid #e5e7eb',
-                borderRadius: 8,
-                padding: '8px 12px',
-                fontSize: 12,
-              }}
-            >
-              건너뛰기
-            </button>
-            <button
-              onClick={proceedToWPSMeasurement}
-              disabled={focusQuestionAnswer == null}
-              style={{
-                background: focusQuestionAnswer != null ? '#111827' : '#9ca3af',
-                color: 'white',
-                border: 'none',
-                borderRadius: 8,
-                padding: '8px 16px',
-                fontSize: 14,
-                fontWeight: 600,
-                cursor: focusQuestionAnswer != null ? 'pointer' : 'not-allowed',
-              }}
-            >
-              다음
-            </button>
-          </div>
+          {gameState === 'idle' && gameRound === 0 ? (
+            <>
+              <div style={{ marginTop: 8, color: '#6b7280', fontSize: 14 }}>
+                화면이 초록색으로 변하면 빠르게 클릭하세요!<br />
+                총 {TOTAL_ROUNDS}번 반복하여 반응 속도를 측정합니다.
+              </div>
+              <div style={{ marginTop: 20, display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <button
+                  onClick={() => {
+                    setFocusQuestionAnswer(2) // 기본값으로 설정하고 진행
+                    proceedToWPSMeasurement()
+                  }}
+                  style={{
+                    background: 'transparent',
+                    color: '#111827',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 8,
+                    padding: '8px 12px',
+                    fontSize: 12,
+                  }}
+                >
+                  건너뛰기
+                </button>
+                <button
+                  onClick={startReactionGame}
+                  style={{
+                    background: '#111827',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 8,
+                    padding: '8px 16px',
+                    fontSize: 14,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  게임 시작
+                </button>
+              </div>
+            </>
+          ) : gameState === 'finished' ? (
+            <>
+              <div style={{ marginTop: 8, color: '#6b7280', fontSize: 14 }}>
+                게임 완료! 평균 반응 시간: {(() => {
+                  const validTimes = reactionTimes.filter((t) => t < 5000)
+                  if (validTimes.length === 0) return '측정 불가'
+                  const avg = validTimes.reduce((a, b) => a + b, 0) / validTimes.length
+                  return `${avg.toFixed(0)}ms`
+                })()}
+              </div>
+              <div style={{ marginTop: 20, display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <button
+                  onClick={() => {
+                    setGameState('idle')
+                    setGameRound(0)
+                    setReactionTimes([])
+                  }}
+                  style={{
+                    background: 'transparent',
+                    color: '#111827',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 8,
+                    padding: '8px 12px',
+                    fontSize: 12,
+                  }}
+                >
+                  다시 하기
+                </button>
+                <button
+                  onClick={proceedToWPSMeasurement}
+                  style={{
+                    background: '#111827',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 8,
+                    padding: '8px 16px',
+                    fontSize: 14,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  다음
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ marginTop: 8, color: '#6b7280', fontSize: 14, textAlign: 'center' }}>
+                {gameRound + 1} / {TOTAL_ROUNDS} 라운드
+              </div>
+              <div
+                onClick={handleGameClick}
+                style={{
+                  marginTop: 20,
+                  minHeight: 200,
+                  borderRadius: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: gameState === 'ready' ? 'pointer' : 'default',
+                  background: gameState === 'ready' ? '#22c55e' : gameState === 'waiting' ? '#f3f4f6' : '#e5e7eb',
+                  transition: 'background 0.1s',
+                  userSelect: 'none',
+                }}
+              >
+                <div style={{ fontSize: 24, fontWeight: 700, color: gameState === 'ready' ? 'white' : '#6b7280' }}>
+                  {gameState === 'waiting' ? '준비...' : gameState === 'ready' ? '클릭!' : '대기 중'}
+                </div>
+              </div>
+              {gameState === 'waiting' && (
+                <div style={{ marginTop: 12, textAlign: 'center', fontSize: 12, color: '#9ca3af' }}>
+                  화면이 초록색으로 변할 때까지 기다리세요
+                </div>
+              )}
+              {gameState === 'ready' && (
+                <div style={{ marginTop: 12, textAlign: 'center', fontSize: 12, color: '#22c55e', fontWeight: 600 }}>
+                  지금 클릭하세요!
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
     ) : null}
