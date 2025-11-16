@@ -101,11 +101,16 @@ export function LecturePlayerPage() {
     },
   })
 
+  const isFirstRender = useRef(true);
+
+  useEffect(() => {
+    isFirstRender.current = false
+  }, [playerState]);
   
 
   const finalizeMicQuestion = async (finalText: string) => {
     const question = (finalText || '').trim()
-    if (question.length === 0) {
+    if (!isFirstRender.current && question.length === 0) {
       setPlayerState((s) => ({ ...s, avatarState: 'idle', questionMode: null }))
       videoRef.current?.play()
       setIsPlayheadPaused(false)
