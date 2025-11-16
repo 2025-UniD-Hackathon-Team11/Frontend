@@ -53,6 +53,7 @@ export function LecturePlayerPage() {
   const frameTimerRef = useRef<number | null>(null)
   const frameAudioRef = useRef<HTMLAudioElement | null>(null)
   const isFrameAudioPlayingRef = useRef<boolean>(false)
+  const audioPlaySeqRef = useRef<number>(0)
   const [subtitle, setSubtitle] = useState<string>('')
   const [audioUnlocked, setAudioUnlocked] = useState<boolean>(false)
   const [pendingAudioUrl, setPendingAudioUrl] = useState<string | null>(null)
@@ -134,6 +135,16 @@ export function LecturePlayerPage() {
     if (m === 'advanced') return 1.25
     return 1
   }
+  const addCacheBuster = (u: string): string => {
+    try {
+      const url = new URL(u, typeof window !== 'undefined' ? window.location.origin : undefined)
+      url.searchParams.set('_cb', String(Date.now()))
+      return url.toString()
+    } catch {
+      const hasQuery = u.includes('?')
+      return `${u}${hasQuery ? '&' : '?'}_cb=${Date.now()}`
+    }
+  }
   const pauseAllFrameAudios = () => {
     try {
       frameAudioRef.current?.pause()
@@ -143,6 +154,106 @@ export function LecturePlayerPage() {
         try { el.pause() } catch {}
       })
     } catch {}
+    isFrameAudioPlayingRef.current = false
+  }
+  const buildAudioCandidatesFor = (f: { audioUrl?: string } | null | undefined): string[] => {
+    if (!f?.audioUrl) return []
+    try {
+      const baseHost = (() => {
+        try {
+          if (f.audioUrl!.startsWith('http')) return new URL(f.audioUrl!).origin
+          if (framePosterUrl && framePosterUrl.startsWith('http')) return new URL(framePosterUrl).origin
+        } catch {}
+        return ''
+      })()
+      const audioName = (() => {
+        try {
+          const u = new URL(f.audioUrl!, baseHost || undefined)
+          return u.pathname.split('/').pop() || f.audioUrl!
+        } catch {
+          const parts = f.audioUrl!.split('/')
+          return parts[parts.length - 1] || f.audioUrl!
+        }
+      })()
+      const numericId = Number(detail?.id)
+      const candidates: string[] = []
+      try {
+        candidates.push(addCacheBuster(new URL(f.audioUrl!, baseHost || window.location.origin).toString()))
+      } catch {
+        if (baseHost) candidates.push(addCacheBuster(`${baseHost}${f.audioUrl!.startsWith('/') ? '' : '/'}${f.audioUrl}`))
+        else candidates.push(addCacheBuster(f.audioUrl!))
+      }
+      if (Number.isFinite(numericId) && baseHost) {
+        candidates.push(addCacheBuster(`${baseHost}/api/lectures/${numericId}/audio/${audioName}`))
+        candidates.push(addCacheBuster(`${baseHost}/api/lectures/${numericId}/frame/${audioName}`))
+        candidates.push(addCacheBuster(`${baseHost}/${audioName}`))
+      }
+      return candidates
+    } catch {
+      return []
+    }
+  }
+  const startFrameAudioForIndex = (idx: number) => {
+    const mySeq = ++audioPlaySeqRef.current
+    if (idx < 0 || idx >= frames.length) return
+    const f = frames[idx]
+    if (!f?.audioUrl) return
+    if (isPlayheadPaused || !audioUnlocked) return
+    pauseAllFrameAudios()
+    const candidates = buildAudioCandidatesFor(f)
+    const tryPlay = async (k: number): Promise<void> => {
+      if (k >= candidates.length) return
+      // If sequence changed or frame changed, abort
+      if (mySeq !== audioPlaySeqRef.current) return
+      if (idx !== currentFrameIndex) return
+      const url = candidates[k]
+      let el = audioCacheRef.current.get(url)
+      if (!el) {
+        el = new Audio()
+        el.preload = 'auto'
+        try { (el as any).crossOrigin = null } catch {}
+        el.muted = false
+        el.volume = 1
+        el.src = url
+        el.load()
+        audioCacheRef.current.set(url, el)
+        cachedOrderRef.current.push(url)
+      }
+      try { el.pause() } catch {}
+      try { el.playbackRate = getPlaybackRate() } catch {}
+      el.currentTime = 0
+      frameAudioRef.current = el
+      try {
+        await el.play()
+        // verify still current
+        if (mySeq !== audioPlaySeqRef.current || idx !== currentFrameIndex) {
+          try { el.pause() } catch {}
+          return
+        }
+        isFrameAudioPlayingRef.current = true
+        // chain to next frame on end so no TTS is skipped
+        el.onended = () => {
+          isFrameAudioPlayingRef.current = false
+          // guard sequence and paused state
+          if (mySeq !== audioPlaySeqRef.current) return
+          if (isPlayheadPaused) return
+          const nextIdx = idx + 1
+          if (nextIdx >= frames.length) return
+          // snap internal playhead to next frame start
+          const nextTime = frames[nextIdx]?.timeSec ?? (frames[idx]?.timeSec ?? 0)
+          playheadOffsetSecRef.current = nextTime
+          playheadStartMsRef.current = performance.now()
+          // update UI state
+          setCurrentFrameIndex(nextIdx)
+          setSubtitle(frames[nextIdx]?.text ?? '')
+          // start next audio
+          startFrameAudioForIndex(nextIdx)
+        }
+      } catch {
+        await tryPlay(k + 1)
+      }
+    }
+    void tryPlay(0)
   }
   const seekToUserTime = (targetSec: number) => {
     const dur = timelineDurationSec || 0
@@ -150,6 +261,9 @@ export function LecturePlayerPage() {
     // Prevent overlapping sounds on seek
     pauseAllFrameAudios()
     setPendingAudioUrl(null)
+    isFrameAudioPlayingRef.current = false
+    // bump sequence to cancel in-flight plays
+    audioPlaySeqRef.current += 1
     playheadOffsetSecRef.current = clamped
     playheadStartMsRef.current = performance.now()
     // Immediate frame update for responsiveness
@@ -160,6 +274,14 @@ export function LecturePlayerPage() {
         else break
       }
       setCurrentFrameIndex(idx)
+      // Immediate subtitle sync
+      if (idx >= 0 && idx < frames.length) {
+        setSubtitle(frames[idx]?.text ?? '')
+        // Immediate audio sync if allowed
+        if (!isPlayheadPaused && audioUnlocked) {
+          startFrameAudioForIndex(idx)
+        }
+      }
     }
     if (!showImageInsteadOfVideo) {
       try { videoRef.current?.seekTo(clamped) } catch {}
@@ -281,7 +403,7 @@ export function LecturePlayerPage() {
     // tie url to player
     if (!currentAnswerAudioUrl) return
     // recreate audio element inside hook by updating src via ref
-    const a = new Audio(currentAnswerAudioUrl)
+    const a = new Audio(addCacheBuster(currentAnswerAudioUrl))
     try { a.playbackRate = getPlaybackRate() } catch {}
     if (audioRef.current) {
       try {
@@ -610,39 +732,12 @@ export function LecturePlayerPage() {
     } catch {}
     if (f.audioUrl) {
       try {
-        const baseHost = (() => {
-          try {
-            if (f.audioUrl.startsWith('http')) return new URL(f.audioUrl).origin
-            if (framePosterUrl && framePosterUrl.startsWith('http')) return new URL(framePosterUrl).origin
-          } catch {}
-          return ''
-        })()
-        const audioName = (() => {
-          try {
-            const u = new URL(f.audioUrl, baseHost || undefined)
-            return u.pathname.split('/').pop() || f.audioUrl
-          } catch {
-            const parts = f.audioUrl.split('/')
-            return parts[parts.length - 1] || f.audioUrl
-          }
-        })()
-        const numericId = Number(detail?.id)
-        const candidates: string[] = []
-        try {
-          candidates.push(new URL(f.audioUrl, baseHost || window.location.origin).toString())
-        } catch {
-          if (baseHost) candidates.push(`${baseHost}${f.audioUrl.startsWith('/') ? '' : '/'}${f.audioUrl}`)
-          else candidates.push(f.audioUrl)
+        if (isPlayheadPaused) {
+          try { frameAudioRef.current?.pause() } catch {}
+          return
         }
-        if (Number.isFinite(numericId) && baseHost) {
-          candidates.push(`${baseHost}/api/lectures/${numericId}/audio/${audioName}`)
-          candidates.push(`${baseHost}/api/lectures/${numericId}/frame/${audioName}`)
-          candidates.push(`${baseHost}/${audioName}`)
-        }
-        // eslint-disable-next-line no-console
-        console.log('[page] audio candidates:', candidates)
-
-        // Preload next 2 audios (lookahead)
+        // Preload lookahead (non-playing)
+        const candidates = buildAudioCandidatesFor(f)
         const preloadUrl = (url: string) => {
           if (!url) return
           let el = audioCacheRef.current.get(url)
@@ -656,7 +751,6 @@ export function LecturePlayerPage() {
             el.load()
             audioCacheRef.current.set(url, el)
             cachedOrderRef.current.push(url)
-            // simple LRU trim
             if (cachedOrderRef.current.length > 24) {
               const oldKey = cachedOrderRef.current.shift()
               if (oldKey) {
@@ -664,81 +758,19 @@ export function LecturePlayerPage() {
                 audioCacheRef.current.delete(oldKey)
               }
             }
-            try { console.log('[audio] preloading:', url) } catch {}
           }
         }
-        // current and lookahead
         preloadUrl(candidates[0])
         const n1 = frames[currentFrameIndex + 1]?.audioUrl
         const n2 = frames[currentFrameIndex + 2]?.audioUrl
         if (n1) preloadUrl(n1)
         if (n2) preloadUrl(n2)
-
-        const tryPlay = async (idx: number): Promise<void> => {
-          if (idx >= candidates.length) {
-            // eslint-disable-next-line no-console
-            console.warn('[page] audio: all candidates failed')
-            setPendingAudioUrl(candidates[0] || null)
-            return
-          }
-          const url = candidates[idx]
-          if (!audioUnlocked) {
-            // Preserve the earliest frame's pending audio until user unlocks
-            setPendingAudioUrl((prev) => (prev ? prev : url))
-            try { console.log('[audio] pending (locked):', url) } catch {}
-            return
-          }
-          let el = audioCacheRef.current.get(url)
-          if (!el) {
-            el = new Audio()
-            el.preload = 'auto'
-            try { (el as any).crossOrigin = null } catch {}
-            el.muted = false
-            el.volume = 1
-            el.src = url
-            el.load()
-            audioCacheRef.current.set(url, el)
-            cachedOrderRef.current.push(url)
-          }
-          // stop any previously playing frame audio to avoid overlaps, then switch ref
-          const prev = frameAudioRef.current
-          if (prev && prev !== el) {
-            try { prev.pause() } catch {}
-          }
-          frameAudioRef.current = el
-          try { el.pause() } catch {}
-          try { el.playbackRate = getPlaybackRate() } catch {}
-          el.currentTime = 0
-          // attach verbose event handlers
-          el.oncanplaythrough = () => { try { console.log('[audio] canplaythrough:', el.src) } catch {} }
-          el.onloadedmetadata = () => { try { console.log('[audio] loadedmetadata:', el.duration) } catch {} }
-          el.onwaiting = () => { try { console.log('[audio] waiting') } catch {} }
-          el.onstalled = () => { try { console.log('[audio] stalled') } catch {} }
-          el.onsuspend = () => { try { console.log('[audio] suspend') } catch {} }
-          el.onplay = () => {
-            isFrameAudioPlayingRef.current = true
-            try { console.log('[audio] onplay:', el.src) } catch {}
-          }
-          el.onpause = () => {
-            isFrameAudioPlayingRef.current = false
-            try { console.log('[audio] onpause:', el.src) } catch {}
-          }
-          el.onended = () => {
-            isFrameAudioPlayingRef.current = false
-            try { console.log('[audio] onended:', el.src) } catch {}
-          }
-          el.onerror = (ev) => { try { console.warn('[audio] onerror:', el.src, ev) } catch {} }
-          // eslint-disable-next-line no-console
-          console.log('[page] try play ->', url)
-          try {
-            await el.play()
-          } catch (e) {
-            // eslint-disable-next-line no-console
-            console.warn('[page] play() rejected for url:', url, e)
-            await tryPlay(idx + 1)
-          }
+        // Play current via unified starter
+        if (audioUnlocked) {
+          startFrameAudioForIndex(currentFrameIndex)
+        } else if (candidates[0]) {
+          setPendingAudioUrl((prev) => prev || candidates[0])
         }
-        void tryPlay(0)
       } catch (e) {
         // eslint-disable-next-line no-console
         console.warn('[page] audio error', e)
@@ -749,6 +781,14 @@ export function LecturePlayerPage() {
       try { frameAudioRef.current?.pause() } catch {}
     }
   }, [currentFrameIndex, frames])
+
+  // Pause any frame audio when playhead is paused; do not auto-play on resume here
+  useEffect(() => {
+    if (isPlayheadPaused) {
+      try { frameAudioRef.current?.pause() } catch {}
+      isFrameAudioPlayingRef.current = false
+    }
+  }, [isPlayheadPaused])
 
   useEffect(() => {
     return () => {
@@ -761,29 +801,8 @@ export function LecturePlayerPage() {
   // On user click unlock, try to resume pending audio
   const handleUnlockAudio = () => {
     setAudioUnlocked(true)
-    const tryUrl = pendingAudioUrl || (currentFrameIndex >= 0 ? frames[currentFrameIndex]?.audioUrl : null)
-    if (tryUrl) {
-      try {
-        if (!frameAudioRef.current) {
-          frameAudioRef.current = new Audio()
-        }
-        const el = frameAudioRef.current
-        if (!el.onplay) el.onplay = () => { isFrameAudioPlayingRef.current = true; try { console.log('[audio] onplay:', el.src) } catch {} }
-        if (!el.onpause) el.onpause = () => { isFrameAudioPlayingRef.current = false; try { console.log('[audio] onpause:', el.src) } catch {} }
-        if (!el.onended) el.onended = () => { isFrameAudioPlayingRef.current = false; try { console.log('[audio] onended:', el.src) } catch {} }
-        if (!el.onerror) el.onerror = (ev) => { try { console.warn('[audio] onerror:', el.src, ev) } catch {} }
-        el.preload = 'auto'
-        el.crossOrigin = 'anonymous'
-        el.muted = false
-        el.volume = 1
-        frameAudioRef.current.src = tryUrl
-        try { frameAudioRef.current.playbackRate = getPlaybackRate() } catch {}
-        frameAudioRef.current.currentTime = 0
-        try { console.log('[audio] unlock play ->', tryUrl) } catch {}
-        void frameAudioRef.current.play().catch((e) => { try { console.warn('[audio] unlock play failed', e) } catch {} })
-        setPendingAudioUrl(null)
-      } catch {}
-    }
+    setPendingAudioUrl(null)
+    startFrameAudioForIndex(currentFrameIndex)
   }
 
 
@@ -1068,14 +1087,10 @@ export function LecturePlayerPage() {
       try { console.log('[pause] -> paused', { elapsed: getUserElapsedSec().toFixed(2) }) } catch {}
     } else {
       updatePlayheadPaused(false)
-      // restart current sentence (frame audio) from the beginning on resume
-      try {
-        if (audioUnlocked && frameAudioRef.current && frameAudioRef.current.src) {
-          frameAudioRef.current.currentTime = 0
-          void frameAudioRef.current.play()
-          try { console.log('[pause] resume -> restart frame audio from beginning') } catch {}
-        }
-      } catch {}
+      // restart current frame sentence from the beginning on resume via unified starter
+      if (audioUnlocked) {
+        startFrameAudioForIndex(currentFrameIndex)
+      }
       videoRef.current?.play()
       try { console.log('[pause] -> resumed', { elapsed: getUserElapsedSec().toFixed(2) }) } catch {}
     }
@@ -1260,7 +1275,7 @@ export function LecturePlayerPage() {
               ref={videoRef}
               src={videoSrc}
               initialTimeSec={(searchParams.get('resume') && savedProgressSec != null) ? savedProgressSec : (detail.lastWatchedSec ?? 0)}
-              isPausedExternally={playerState.avatarState !== 'idle'}
+              isPausedExternally={playerState.avatarState !== 'idle' || isPlayheadPaused}
               posterUrl={framePosterUrl}
               onTimeUpdate={(t) =>
                 setPlayerState((s) => ({ ...s, videoCurrentTime: t }))

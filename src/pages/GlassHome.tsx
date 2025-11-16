@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { useInView } from 'react-intersection-observer'
+import { useInView } from '../hooks/useInView'
 import Navigation from '../components/landing/Navigation'
 import ValueCard from '../components/landing/ValueCard'
 import FeatureCard from '../components/landing/FeatureCard'
@@ -14,13 +14,13 @@ export default function GlassHome() {
   const navigate = useNavigate()
   const sections = ['hero', 'philosophy', 'about', 'features', 'values', 'score', 'cta']
 
-  const [heroRef, heroInView] = useInView({ threshold: 0.3 })
-  const [philosophyRef, philosophyInView] = useInView({ threshold: 0.2 })
-  const [aboutRef, aboutInView] = useInView({ threshold: 0.2 })
-  const [featuresRef, featuresInView] = useInView({ threshold: 0.2 })
-  const [valuesRef, valuesInView] = useInView({ threshold: 0.2 })
-  const [scoreRef, scoreInView] = useInView({ threshold: 0.2 })
-  const [ctaRef, ctaInView] = useInView({ threshold: 0.2 })
+  const { ref: heroRef, inView: heroInView } = useInView({ threshold: 0.3 })
+  const { ref: philosophyRef, inView: philosophyInView } = useInView({ threshold: 0.2 })
+  const { ref: aboutRef, inView: aboutInView } = useInView({ threshold: 0.2 })
+  const { ref: featuresRef, inView: featuresInView } = useInView({ threshold: 0.2 })
+  const { ref: valuesRef, inView: valuesInView } = useInView({ threshold: 0.2 })
+  const { ref: scoreRef, inView: scoreInView } = useInView({ threshold: 0.2 })
+  const { ref: ctaRef, inView: ctaInView } = useInView({ threshold: 0.2 })
 
   useEffect(() => {
     if (ctaInView) setActiveSection('cta')
@@ -37,7 +37,7 @@ export default function GlassHome() {
       <div className="fixed left-0 top-0 z-40 h-0.5 w-full">
         <div className="h-full bg-black/80 transition-[width] duration-150" style={{ width: `${scrollProgress}%` }} />
       </div>
-      <Navigation activeSection={activeSection} />
+      <Navigation />
       <ScrollSnap
         sections={sections}
         onSectionChange={setActiveSection}

@@ -30,7 +30,13 @@ export async function sendQuestion(params: {
     }
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Pragma: 'no-cache',
+        Expires: '0',
+      },
+      cache: 'no-store',
       body: JSON.stringify(body),
     })
     const elapsedMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt
@@ -135,7 +141,13 @@ export async function generateQuiz(params: {
   try {
     const res = await fetch(QUIZ_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Pragma: 'no-cache',
+        Expires: '0',
+      },
+      cache: 'no-store',
       body: JSON.stringify(body),
     })
     const rawText = await res.clone().text().catch(() => '')
